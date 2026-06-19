@@ -1,0 +1,18 @@
+# Build artifacts
+*.o
+*.d
+/bin/
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Personal docs
+.per/
