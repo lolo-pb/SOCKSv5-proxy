@@ -34,6 +34,6 @@ obj/%.o: src/%.c
 
 clean:
 	rm -rf $(OUTPUT_FOLDER)
-	rm -rf $(OBJECT_FOLDER)
+	rm -rf $(OBJECTS_FOLDER)
 
 .PHONY: all server client clean
