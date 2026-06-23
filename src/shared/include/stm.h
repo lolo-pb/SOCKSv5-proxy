@@ -34,7 +34,8 @@ struct state_machine {
   const struct state_definition *current;
 };
 
-struct selector_key *key;
+/* fwd: definido en selector.h */
+struct selector_key;
 
 /**
  * definición de un estado de la máquina de estados
