@@ -1,5 +1,5 @@
 COMPILER=gcc
 
-COMPILER_FLAGS=-Wall -pedantic -g
+COMPILER_FLAGS=-std=c11 -D_POSIX_C_SOURCE=200809L -Wall -pedantic -g
 
 LD_FLAGS=
