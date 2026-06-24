@@ -24,7 +24,7 @@
 #include <unistd.h>
 
 #include "selector.h"
-#include "socks5.h"
+//#include "socks5.h"  // ese noc pq existe pero mepa q es un wraper del nio se puede agregar dsps
 #include "socks5nio.h"
 
 static bool done = false;
@@ -36,6 +36,7 @@ static void sigterm_handler(const int signal) {
 
 int main(const int argc, const char **argv) {
   unsigned port = 1080;
+  // TODO : eto puede estar divertido poner algun numero loco
 
   if (argc == 1) {
     // utilizamos el default
@@ -43,11 +44,9 @@ int main(const int argc, const char **argv) {
     char *end = 0;
     const long sl = strtol(argv[1], &end, 10);
 
-    if (
-      end == argv[1] || '\0' != *end ||
-      ((LONG_MIN == sl || LONG_MAX == sl) && ERANGE == errno) || sl < 0 ||
-      sl > USHRT_MAX
-    ) {
+    if (end == argv[1] || '\0' != *end ||
+        ((LONG_MIN == sl || LONG_MAX == sl) && ERANGE == errno) || sl < 0 ||
+        sl > USHRT_MAX) {
       fprintf(stderr, "port should be an integer: %s\n", argv[1]);
       return 1;
     }
@@ -86,7 +85,7 @@ int main(const int argc, const char **argv) {
     goto finally;
   }
 
-  if (listen(server, 20) < 0) {
+  if (listen(server, 20) < 0) {// TODO : hardcoded 20, noc bien que es
     err_msg = "unable to listen";
     goto finally;
   }
@@ -102,10 +101,11 @@ int main(const int argc, const char **argv) {
   }
   const struct selector_init conf = {
     .signal = SIGALRM,
-    .select_timeout = {
-      .tv_sec = 10,
-      .tv_nsec = 0,
-    },
+    .select_timeout =
+      {
+        .tv_sec = 10,
+        .tv_nsec = 0,
+      },
   };
   if (0 != selector_init(&conf)) {
     err_msg = "initializing selector";
@@ -118,6 +118,7 @@ int main(const int argc, const char **argv) {
     goto finally;
   }
   const struct fd_handler socksv5 = {
+    // TODO : aca va la salsa del socks5nio.c
     .handle_read = socksv5_passive_accept,
     .handle_write = NULL,
     .handle_close = NULL,// nada que liberar
