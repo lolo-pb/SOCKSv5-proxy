@@ -74,6 +74,13 @@ int main(const int argc, const char **argv) {
     goto finally;
   }
 
+  fprintf(stdout, "  ______             _                _______  \n");
+  fprintf(stdout, " / _____)           | |              ( ______) \n");
+  fprintf(stdout, "( (____   ___   ____| |  _  ___ _   _| |____   \n");
+  fprintf(stdout, " \\____ \\ / _ \\ / ___) |_/ )/___) | | (_____ \\  \n");
+  fprintf(stdout, " _____) ) |_| ( (___|  _ ((___ )\\ V / _____) ) \n");
+  fprintf(stdout, "(______/ \\___/ \\____)_| \\_(___/  \\_/ (______/  \n");
+
   fprintf(stdout, "Listening on TCP port %d\n", port);
 
   // man 7 ip. no importa reportar nada si falla.
