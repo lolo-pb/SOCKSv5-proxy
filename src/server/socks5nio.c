@@ -13,11 +13,14 @@ struct socksv5 {
 };
 
 static void socksv5_read(struct selector_key *key);
+static void socksv5_write(struct selector_key *key);
 static void socksv5_close(struct selector_key *key);
+static void
+socksv5_apply_action(struct selector_key *key, socks5_action action);
 
 static const struct fd_handler socksv5_handler = {
   .handle_read = socksv5_read,
-  .handle_write = NULL,
+  .handle_write = socksv5_write,
   .handle_block = NULL,
   .handle_close = socksv5_close,
 };
@@ -64,13 +67,42 @@ static void socksv5_read(struct selector_key *key) {
 
   if (bytes <= 0) {// error or EOF
     selector_unregister_fd(key->s, key->fd);
-    fprintf(stderr, "closing ...\n");
+    fprintf(stderr, "closing fd=%d ...\n", key->fd);
     close(key->fd);
     return;
   }
 
   const socks5_action action = socks5_handle_read(key, buffer, bytes);
 
+  socksv5_apply_action(key, action);
+}
+
+static void socksv5_close(struct selector_key *key) { free(key->data); }
+
+static void socksv5_write(struct selector_key *key) {
+  const uint8_t *response;
+  size_t response_bytes;
+
+  const socks5_action action =
+    socks5_handle_write(key, &response, &response_bytes);
+
+  const ssize_t bytes = write(key->fd, response, response_bytes);
+
+  if (bytes <= 0) {
+    selector_unregister_fd(key->s, key->fd);
+    fprintf(stderr, "closing fd=%d ...\n", key->fd);
+    close(key->fd);
+    return;
+  }
+
+  socksv5_apply_action(key, action);
+}
+
+/**
+ * Sets the next action to wait for in the select
+ */
+static void
+socksv5_apply_action(struct selector_key *key, const socks5_action action) {
   switch (action) {
     case SOCKS5_ACTION_READ:
       selector_set_interest_key(key, OP_READ);
@@ -85,8 +117,6 @@ static void socksv5_read(struct selector_key *key) {
       break;
   }
 }
-
-static void socksv5_close(struct selector_key *key) { free(key->data); }
 
 void socksv5_pool_destroy(void) {
   // TODO: liberar pool de conexiones

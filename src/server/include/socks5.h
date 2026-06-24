@@ -18,5 +18,8 @@ typedef enum {
 socks5_action socks5_handle_read(
   struct selector_key *key, const uint8_t *data, ssize_t bytes
 );
+socks5_action socks5_handle_write(
+  struct selector_key *key, const uint8_t **data, size_t *bytes
+);
 
 #endif
