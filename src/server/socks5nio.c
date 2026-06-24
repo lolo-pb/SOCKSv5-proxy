@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include "selector.h"
+#include "socks5.h"
 #include "socks5nio.h"
 
 struct socksv5 {
@@ -58,12 +59,21 @@ void socksv5_passive_accept(struct selector_key *key) {
 }
 
 static void socksv5_read(struct selector_key *key) {
-  // TODO: drive the SOCKS5 state machine.
-  selector_unregister_fd(key->s, key->fd);
+  const socks5_action action = socks5_handle_read(key);
 
-  fprintf(stderr, "Read smth from fd=%d\n", key->fd);
-  fprintf(stderr, "closing ...");
-  close(key->fd);
+  switch (action) {
+    case SOCKS5_ACTION_READ:
+      selector_set_interest_key(key, OP_READ);
+      break;
+    case SOCKS5_ACTION_WRITE:
+      selector_set_interest_key(key, OP_WRITE);
+      break;
+    case SOCKS5_ACTION_CLOSE:
+      selector_unregister_fd(key->s, key->fd);
+      fprintf(stderr, "closing ...\n");
+      close(key->fd);
+      break;
+  }
 }
 
 static void socksv5_close(struct selector_key *key) { free(key->data); }
