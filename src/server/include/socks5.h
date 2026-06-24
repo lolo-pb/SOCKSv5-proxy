@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 #include "selector.h"
 
@@ -14,6 +15,8 @@ typedef enum {
   SOCKS5_ACTION_CLOSE,
 } socks5_action;
 
-socks5_action socks5_handle_read(struct selector_key *key);
+socks5_action socks5_handle_read(
+  struct selector_key *key, const uint8_t *data, ssize_t bytes
+);
 
 #endif

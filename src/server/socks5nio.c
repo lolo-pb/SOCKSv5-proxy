@@ -59,7 +59,17 @@ void socksv5_passive_accept(struct selector_key *key) {
 }
 
 static void socksv5_read(struct selector_key *key) {
-  const socks5_action action = socks5_handle_read(key);
+  uint8_t buffer[1024];// TODO : check size curr 1024 bytes
+  const ssize_t bytes = read(key->fd, buffer, sizeof(buffer));
+
+  if (bytes <= 0) {// error or EOF
+    selector_unregister_fd(key->s, key->fd);
+    fprintf(stderr, "closing ...\n");
+    close(key->fd);
+    return;
+  }
+
+  const socks5_action action = socks5_handle_read(key, buffer, bytes);
 
   switch (action) {
     case SOCKS5_ACTION_READ:
@@ -70,7 +80,7 @@ static void socksv5_read(struct selector_key *key) {
       break;
     case SOCKS5_ACTION_CLOSE:
       selector_unregister_fd(key->s, key->fd);
-      fprintf(stderr, "closing ...\n");
+      fprintf(stderr, "closing fd=%d ...\n", key->fd);
       close(key->fd);
       break;
   }
