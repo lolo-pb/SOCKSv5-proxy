@@ -24,7 +24,6 @@
 #include <unistd.h>
 
 #include "selector.h"
-//#include "socks5.h"  // ese noc pq existe pero mepa q es un wraper del nio se puede agregar dsps
 #include "socks5nio.h"
 
 static bool done = false;
