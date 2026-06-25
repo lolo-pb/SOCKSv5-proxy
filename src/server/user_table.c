@@ -16,6 +16,7 @@ static struct {
 void user_table_init(void) { memset(&table, 0, sizeof(table)); }
 
 static struct user_entry *find_by_name(const char *name) {
+  if (name == NULL) return NULL;
   for (unsigned i = 0; i < MAX_USERS; i++) {
     if (table.entries[i].active && strcmp(table.entries[i].name, name) == 0)
       return &table.entries[i];
@@ -54,6 +55,7 @@ bool user_table_remove(const char *name) {
 }
 
 bool user_table_lookup(const char *name, const char *pass) {
+  if (pass == NULL) return false;
   struct user_entry *e = find_by_name(name);
   if (e == NULL) return false;
   return strcmp(e->pass, pass) == 0;
@@ -62,6 +64,7 @@ bool user_table_lookup(const char *name, const char *pass) {
 unsigned user_table_count(void) { return table.count; }
 
 void user_table_list(user_list_cb_t cb, void *ctx) {
+  if (cb == NULL) return;
   for (unsigned i = 0; i < MAX_USERS; i++) {
     if (table.entries[i].active) cb(table.entries[i].name, ctx);
   }

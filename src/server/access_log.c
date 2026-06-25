@@ -15,9 +15,11 @@ void access_log_add(
 ) {
   struct access_entry *e = &log_state.entries[log_state.next];
 
-  strncpy(e->username, username, sizeof(e->username) - 1);
+  const char *user = (username != NULL) ? username : "-";
+  const char *addr = (dest_addr != NULL) ? dest_addr : "-";
+  strncpy(e->username, user, sizeof(e->username) - 1);
   e->username[sizeof(e->username) - 1] = '\0';
-  strncpy(e->dest_addr, dest_addr, sizeof(e->dest_addr) - 1);
+  strncpy(e->dest_addr, addr, sizeof(e->dest_addr) - 1);
   e->dest_addr[sizeof(e->dest_addr) - 1] = '\0';
   e->dest_port = dest_port;
   e->timestamp = time(NULL);
@@ -30,5 +32,10 @@ unsigned access_log_count(void) { return log_state.count; }
 
 const struct access_entry *access_log_get(unsigned *out_count) {
   if (out_count != NULL) *out_count = log_state.count;
+  /* when not full, entries start at 0; when full, oldest is at next */
   return log_state.entries;
+}
+
+unsigned access_log_oldest_index(void) {
+  return (log_state.count < MAX_LOG_ENTRIES) ? 0 : log_state.next;
 }

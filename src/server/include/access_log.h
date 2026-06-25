@@ -22,4 +22,7 @@ unsigned access_log_count(void);
 /* returns pointer to internal array, count written to *out_count */
 const struct access_entry *access_log_get(unsigned *out_count);
 
+/* index of the oldest entry (for iterating in chronological order) */
+unsigned access_log_oldest_index(void);
+
 #endif

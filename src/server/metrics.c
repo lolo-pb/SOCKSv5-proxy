@@ -11,7 +11,9 @@ void metrics_connection_opened(void) {
   m.current_connections++;
 }
 
-void metrics_connection_closed(void) { m.current_connections--; }
+void metrics_connection_closed(void) {
+  if (m.current_connections > 0) m.current_connections--;
+}
 
 void metrics_add_bytes(uint64_t n) { m.bytes_transferred += n; }
 
