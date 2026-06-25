@@ -89,21 +89,39 @@ Generic byte parser engine.
 `src/shared/netutils.c`
 Shared network helpers.
 
+## Runtime Layers
+
+`socksv5`
+Connection/socket wrapper idea. This is the NIO side: accepted client fd, selector registration, socket reads/writes, close behavior.
+
+`socks5`
+Protocol engine. This owns the SOCKS5 state machine, current read bytes, prepared response bytes, and protocol decisions.
+
+`selector_key`
+Selector/fd event context. The selector passes this to callbacks so handlers know which selector and fd fired, plus the per-fd `data` pointer.
+
+Current code keeps this simple: the selector `data` for a client points directly to `struct socks5`.
+
 ## Current SOCKS5 Work
 
 We started replacing the temporary accept-and-close behavior.
 
 Current server flow:
 
+Idea de divicion de lod socks: 
+  socksv5     = connection/socket wrapper
+  socks5      = protocol engine
+  selector_key = selector/fd context
+
+
 1. `main.c` listens on port `1080` by default.
 2. The listening fd is registered with the selector for `OP_READ`.
 3. When a client connects, `socksv5_passive_accept()` accepts it.
 4. The client fd is set nonblocking.
-5. A small `struct socksv5` is allocated for per-client state.
+5. A `struct socks5` is allocated for per-client protocol state.
 6. The client fd is registered in the selector for `OP_READ`.
-7. `socksv5_read()` is still a placeholder. It logs that something was read/handled, unregisters the fd, and closes it.
-
-The next real step is to make `socksv5_read()` drive the SOCKS5 handshake instead of closing immediately.
+7. `socksv5_read()` reads socket bytes into the `struct socks5` read buffer.
+8. `socks5.c` drives the SOCKS5 state machine and prepares protocol responses.
 
 `socks5nio.c`
 Selector/socket glue lives here.

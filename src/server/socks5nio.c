@@ -8,10 +8,6 @@
 #include "socks5.h"
 #include "socks5nio.h"
 
-struct socksv5 {
-  int client_fd;
-};
-
 static void socksv5_read(struct selector_key *key);
 static void socksv5_write(struct selector_key *key);
 static void socksv5_close(struct selector_key *key);
@@ -38,13 +34,12 @@ void socksv5_passive_accept(struct selector_key *key) {
     return;
   }
 
-  struct socksv5 *state = malloc(sizeof(*state));
+  struct socks5 *state = malloc(sizeof(*state));
   if (state == NULL) {
     close(client);
     return;
   }
-  memset(state, 0, sizeof(*state));
-  state->client_fd = client;
+  socks5_init(state);
 
   selector_status ss =
     selector_register(key->s, client, &socksv5_handler, OP_READ, state);
@@ -62,8 +57,9 @@ void socksv5_passive_accept(struct selector_key *key) {
 }
 
 static void socksv5_read(struct selector_key *key) {
-  uint8_t buffer[1024];// TODO : check size curr 1024 bytes
-  const ssize_t bytes = read(key->fd, buffer, sizeof(buffer));
+  struct socks5 *state = key->data;
+  const ssize_t bytes =
+    read(key->fd, state->read_buffer, sizeof(state->read_buffer));
 
   if (bytes <= 0) {// error or EOF
     selector_unregister_fd(key->s, key->fd);
@@ -72,7 +68,8 @@ static void socksv5_read(struct selector_key *key) {
     return;
   }
 
-  const socks5_action action = socks5_handle_read(key, buffer, bytes);
+  state->read_bytes = bytes;
+  const socks5_action action = socks5_handle_read(state, key);
 
   socksv5_apply_action(key, action);
 }
@@ -82,9 +79,10 @@ static void socksv5_close(struct selector_key *key) { free(key->data); }
 static void socksv5_write(struct selector_key *key) {
   const uint8_t *response;
   size_t response_bytes;
+  struct socks5 *state = key->data;
 
   const socks5_action action =
-    socks5_handle_write(key, &response, &response_bytes);
+    socks5_handle_write(state, key, &response, &response_bytes);
 
   const ssize_t bytes = write(key->fd, response, response_bytes);
 
