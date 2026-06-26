@@ -60,16 +60,51 @@ Server bootstrap. Parses an optional port argument, creates the passive TCP sock
 
 Default port is `1080`.
 
-`src/server/socks5nio.c`
-NIO/socket glue for the SOCKS5 server. The listening socket callback accepts clients. Accepted clients are set nonblocking, get a small per-client state object, and are registered in the selector.
+`main.c` does not implement the SOCKS5 protocol itself. Its main server-specific handoff is registering the passive server fd with this handler:
 
-This is where the next SOCKS5 behavior is currently being added.
+```c
+.handle_read = socksv5_passive_accept
+```
+
+After that, new client sockets and protocol state are owned by the SOCKS5 NIO/protocol files.
+
+`src/server/socks5nio.c`
+Selector/socket glue for the SOCKS5 server. It is the layer between the generic selector and the SOCKS5 protocol engine.
+
+Responsibilities:
+
+- Accept new clients from the passive server fd.
+- Put accepted client sockets in nonblocking mode.
+- Allocate one `struct socks5` per client connection.
+- Register each client fd in the selector with read/write callbacks.
+- Read bytes from the socket into the connection's `struct socks5` read buffer.
+- Ask `socks5.c` what the protocol wants to do next: read, write, or close.
+- Write prepared response bytes back to the client.
+- Unregister/close client fds and free the per-client state when done.
+
+The important object relationship is:
+
+```text
+selector fd data -> struct socks5
+```
+
+So when the selector calls a client callback, `key->data` is the SOCKS5 state for that client.
 
 `src/server/socks5.c`
-SOCKS5 protocol-level code. Currently has protocol constants through its header and a helper for supported auth methods.
+SOCKS5 protocol-level code. This owns the per-connection protocol state machine and decides what response should be sent next.
+
+Responsibilities:
+
+- Initialize `struct socks5`.
+- Track the SOCKS5 phase, currently hello/auth-method negotiation and request-read placeholder.
+- Interpret bytes that `socks5nio.c` already read from the socket.
+- Fill the response buffer when the protocol needs to answer.
+- Return a `socks5_action` telling the NIO layer whether to wait for read, wait for write, or close.
+
+Right now it supports the initial SOCKS5 hello enough to accept no-auth (`0x00`) or reject unsupported/invalid methods with `0xFF`. The actual CONNECT request handling is still only a placeholder.
 
 `src/server/include/socks5.h`
-SOCKS5 protocol constants, small protocol structs, and protocol helper declarations.
+SOCKS5 protocol constants, the `struct socks5` per-client state object, state/action enums, and protocol helper declarations.
 
 `src/server/include/socks5nio.h`
 Public server NIO API used by `main.c`.
@@ -104,15 +139,7 @@ Current code keeps this simple: the selector `data` for a client points directly
 
 ## Current SOCKS5 Work
 
-We started replacing the temporary accept-and-close behavior.
-
 Current server flow:
-
-Idea de divicion de lod socks: 
-  socksv5     = connection/socket wrapper
-  socks5      = protocol engine
-  selector_key = selector/fd context
-
 
 1. `main.c` listens on port `1080` by default.
 2. The listening fd is registered with the selector for `OP_READ`.
@@ -122,6 +149,7 @@ Idea de divicion de lod socks:
 6. The client fd is registered in the selector for `OP_READ`.
 7. `socksv5_read()` reads socket bytes into the `struct socks5` read buffer.
 8. `socks5.c` drives the SOCKS5 state machine and prepares protocol responses.
+9. `socks5nio.c` applies the returned action by changing selector interest to read/write or closing the fd.
 
 `socks5nio.c`
 Selector/socket glue lives here.
@@ -158,7 +186,7 @@ The `closing: Interrupted system call` line appears after pressing `Ctrl-C` whil
 
 ## Suggestions / Uncertainty
 
-`socksv5_read()` currently unregisters and closes without actually reading bytes. That is fine as a placeholder, but the next change should introduce a real connection state machine and buffers.
+CONNECT request parsing and upstream connection handling are not implemented yet. `socks5.c` currently stops at the request-read state placeholder.
 
 The name `socksv5` appears in code, while the protocol is usually written `socks5`. This is harmless but may become confusing if both spellings spread.
 
