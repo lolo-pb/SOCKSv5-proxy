@@ -12,7 +12,9 @@ static unsigned hello_write(struct selector_key *key);
 static void auth_read_init(const unsigned state, struct selector_key *key);
 static unsigned auth_read(struct selector_key *key);
 static unsigned auth_write(struct selector_key *key);
+static void request_read_init(const unsigned state, struct selector_key *key);
 static unsigned request_read(struct selector_key *key);
+static unsigned request_write(struct selector_key *key);
 
 static const struct state_definition socks5_states[] = {
   {
@@ -35,7 +37,12 @@ static const struct state_definition socks5_states[] = {
   },
   {
     .state = SOCKS5_STATE_REQUEST_READ,
+    .on_arrival = request_read_init,
     .on_read_ready = request_read,
+  },
+  {
+    .state = SOCKS5_STATE_REQUEST_WRITE,
+    .on_write_ready = request_write,
   },
   {
     .state = SOCKS5_STATE_DONE,
@@ -172,8 +179,41 @@ static unsigned auth_write(struct selector_key *key) {
                                                    : SOCKS5_STATE_ERROR;
 }
 
+static void request_read_init(const unsigned state, struct selector_key *key) {
+  struct socks5 *socks = key->data;
+
+  socks->request_reply = SOCKS5_REPLY_GENERAL_FAILURE;
+  request_parser_init(&socks->request);
+}
+
 static unsigned request_read(struct selector_key *key) {
   struct socks5 *socks = key->data;
-  buffer_reset(&socks->read_buffer);
+  bool error = false;
+  const enum request_state state =
+    request_consume(&socks->read_buffer, &socks->request, &error);
+
+  if (error) {
+    socks->request_reply = SOCKS5_REPLY_ADDRESS_TYPE_NOT_SUPPORTED;
+  } else if (!request_is_done(state, NULL)) {
+    return SOCKS5_STATE_REQUEST_READ;
+  } else if (socks->request.command != SOCKS5_CMD_CONNECT) {
+    socks->request_reply = SOCKS5_REPLY_COMMAND_NOT_SUPPORTED;
+  } else {
+    socks->request_reply = SOCKS5_REPLY_GENERAL_FAILURE;
+  }
+
+  if (-1 ==
+      request_marshall_reply(&socks->write_buffer, socks->request_reply)) {
+    return SOCKS5_STATE_ERROR;
+  }
+  return SOCKS5_STATE_REQUEST_WRITE;
+}
+
+static unsigned request_write(struct selector_key *key) {
+  struct socks5 *socks = key->data;
+
+  if (buffer_can_read(&socks->write_buffer)) {
+    return SOCKS5_STATE_REQUEST_WRITE;
+  }
   return SOCKS5_STATE_DONE;
 }

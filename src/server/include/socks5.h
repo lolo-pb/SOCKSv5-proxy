@@ -9,6 +9,7 @@
 #include "auth.h"
 #include "buffer.h"
 #include "hello.h"
+#include "request.h"
 #include "selector.h"
 #include "stm.h"
 
@@ -24,6 +25,7 @@ typedef enum {
   SOCKS5_STATE_AUTH_READ,
   SOCKS5_STATE_AUTH_WRITE,
   SOCKS5_STATE_REQUEST_READ,
+  SOCKS5_STATE_REQUEST_WRITE,
   SOCKS5_STATE_DONE,
   SOCKS5_STATE_ERROR,
 } socks5_state;
@@ -42,8 +44,10 @@ struct socks5 {
   buffer write_buffer;
   struct hello_parser hello;
   struct auth_parser auth;
+  struct request_parser request;
   uint8_t selected_method;
   uint8_t auth_status;
+  uint8_t request_reply;
 };
 
 void socks5_set_args(struct socks5args *args);
