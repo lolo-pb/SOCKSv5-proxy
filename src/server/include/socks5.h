@@ -5,14 +5,27 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#include "args.h"
+#include "auth.h"
+#include "buffer.h"
+#include "hello.h"
 #include "selector.h"
 #include "stm.h"
 
 #define SOCKS5_VERSION 0x05
 
+#define AUTH_VERSION 0x01
+#define AUTH_STATUS_SUCCESS 0x00
+#define AUTH_STATUS_FAILURE 0x01
+
 typedef enum {
   SOCKS5_STATE_HELLO_READ,
+  SOCKS5_STATE_HELLO_WRITE,
+  SOCKS5_STATE_AUTH_READ,
+  SOCKS5_STATE_AUTH_WRITE,
   SOCKS5_STATE_REQUEST_READ,
+  SOCKS5_STATE_DONE,
+  SOCKS5_STATE_ERROR,
 } socks5_state;
 
 typedef enum {
@@ -23,18 +36,19 @@ typedef enum {
 
 struct socks5 {
   struct state_machine stm;
-  uint8_t read_buffer[1024];
-  ssize_t read_bytes;
-  uint8_t response[16];
-  size_t response_bytes;
-  int close_after_write;
+  uint8_t raw_read_buffer[4096];
+  uint8_t raw_write_buffer[4096];
+  buffer read_buffer;
+  buffer write_buffer;
+  struct hello_parser hello;
+  struct auth_parser auth;
+  uint8_t selected_method;
+  uint8_t auth_status;
 };
 
+void socks5_set_args(struct socks5args *args);
 void socks5_init(struct socks5 *socks);
 socks5_action socks5_handle_read(struct socks5 *socks, struct selector_key *key);
-socks5_action socks5_handle_write(
-  struct socks5 *socks, struct selector_key *key, const uint8_t **data,
-  size_t *bytes
-);
+socks5_action socks5_handle_write(struct socks5 *socks, struct selector_key *key);
 
 #endif

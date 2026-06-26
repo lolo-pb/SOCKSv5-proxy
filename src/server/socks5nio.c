@@ -4,6 +4,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include "buffer.h"
 #include "selector.h"
 #include "socks5.h"
 #include "socks5nio.h"
@@ -20,6 +21,8 @@ static const struct fd_handler socksv5_handler = {
   .handle_block = NULL,
   .handle_close = socksv5_close,
 };
+
+void socksv5_init(struct socks5args *args) { socks5_set_args(args); }
 
 void socksv5_passive_accept(struct selector_key *key) {
   struct sockaddr_storage client_addr;
@@ -58,8 +61,9 @@ void socksv5_passive_accept(struct selector_key *key) {
 
 static void socksv5_read(struct selector_key *key) {
   struct socks5 *state = key->data;
-  const ssize_t bytes =
-    read(key->fd, state->read_buffer, sizeof(state->read_buffer));
+  size_t count;
+  uint8_t *ptr = buffer_write_ptr(&state->read_buffer, &count);
+  const ssize_t bytes = read(key->fd, ptr, count);
 
   if (bytes <= 0) {// error or EOF
     selector_unregister_fd(key->s, key->fd);
@@ -68,7 +72,7 @@ static void socksv5_read(struct selector_key *key) {
     return;
   }
 
-  state->read_bytes = bytes;
+  buffer_write_adv(&state->read_buffer, bytes);
   const socks5_action action = socks5_handle_read(state, key);
 
   socksv5_apply_action(key, action);
@@ -77,14 +81,10 @@ static void socksv5_read(struct selector_key *key) {
 static void socksv5_close(struct selector_key *key) { free(key->data); }
 
 static void socksv5_write(struct selector_key *key) {
-  const uint8_t *response;
-  size_t response_bytes;
   struct socks5 *state = key->data;
-
-  const socks5_action action =
-    socks5_handle_write(state, key, &response, &response_bytes);
-
-  const ssize_t bytes = write(key->fd, response, response_bytes);
+  size_t count;
+  uint8_t *ptr = buffer_read_ptr(&state->write_buffer, &count);
+  const ssize_t bytes = write(key->fd, ptr, count);
 
   if (bytes <= 0) {
     selector_unregister_fd(key->s, key->fd);
@@ -92,6 +92,9 @@ static void socksv5_write(struct selector_key *key) {
     close(key->fd);
     return;
   }
+
+  buffer_read_adv(&state->write_buffer, bytes);
+  const socks5_action action = socks5_handle_write(state, key);
 
   socksv5_apply_action(key, action);
 }
