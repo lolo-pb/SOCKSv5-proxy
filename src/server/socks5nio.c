@@ -37,7 +37,7 @@ void socksv5_passive_accept(struct selector_key *key) {
     return;
   }
 
-  struct socks5 *state = malloc(sizeof(*state));
+  struct socks5 *state = calloc(1, sizeof(*state));
   if (state == NULL) {
     close(client);
     return;
@@ -94,6 +94,11 @@ static void socksv5_write(struct selector_key *key) {
   }
 
   buffer_read_adv(&state->write_buffer, bytes);
+  if (buffer_can_read(&state->write_buffer)) {
+    selector_set_interest_key(key, OP_WRITE);
+    return;
+  }
+
   const socks5_action action = socks5_handle_write(state, key);
 
   socksv5_apply_action(key, action);

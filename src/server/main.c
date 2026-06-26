@@ -28,6 +28,8 @@
 #include "selector.h"
 #include "socks5nio.h"
 
+#define SERVER_BACKLOG SOMAXCONN
+
 static bool done = false;
 
 static void sigterm_handler(const int signal) {
@@ -78,7 +80,7 @@ int main(const int argc, char **argv) {
     goto finally;
   }
 
-  if (listen(server, 20) < 0) {// TODO : hardcoded 20, noc bien que es
+  if (listen(server, SERVER_BACKLOG) < 0) {
     err_msg = "unable to listen";
     goto finally;
   }
@@ -112,7 +114,7 @@ int main(const int argc, char **argv) {
     goto finally;
   }
   const struct fd_handler socksv5 = {
-    // TODO : aca va la salsa del socks5nio.c
+    // aca va la salsa del socks5nio.c
     .handle_read = socksv5_passive_accept,
     .handle_write = NULL,
     .handle_close = NULL,// nada que liberar

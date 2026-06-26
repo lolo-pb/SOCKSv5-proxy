@@ -76,7 +76,7 @@ socks5_handle_read(struct socks5 *socks, struct selector_key *key) {
 
 socks5_action
 socks5_handle_write(struct socks5 *socks, struct selector_key *key) {
-  const unsigned state = stm_handler_write(&socks->stm, key);// idem ^^^^
+  const unsigned state = stm_handler_write(&socks->stm, key);
 
   if (state == SOCKS5_STATE_ERROR || state == SOCKS5_STATE_DONE) {
     return SOCKS5_ACTION_CLOSE;
