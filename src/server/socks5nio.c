@@ -62,6 +62,11 @@ void socksv5_passive_accept(struct selector_key *key) {
 
 static void socksv5_read(struct selector_key *key) {
   struct socks5 *state = key->data;
+  if (socks5_is_relaying(state)) {
+    socksv5_apply_action(key, socks5_relay_client_read(state, key));
+    return;
+  }
+
   size_t count;
   uint8_t *ptr = buffer_write_ptr(&state->read_buffer, &count);
   const ssize_t bytes = read(key->fd, ptr, count);
@@ -87,6 +92,11 @@ static void socksv5_close(struct selector_key *key) {
 
 static void socksv5_write(struct selector_key *key) {
   struct socks5 *state = key->data;
+  if (socks5_is_relaying(state)) {
+    socksv5_apply_action(key, socks5_relay_client_write(state, key));
+    return;
+  }
+
   size_t count;
   uint8_t *ptr = buffer_read_ptr(&state->write_buffer, &count);
   const ssize_t bytes = write(key->fd, ptr, count);
@@ -115,6 +125,8 @@ static void socksv5_write(struct selector_key *key) {
 static void
 socksv5_apply_action(struct selector_key *key, const socks5_action action) {
   switch (action) {
+    case SOCKS5_ACTION_NONE:
+      break;
     case SOCKS5_ACTION_NOOP:
       selector_set_interest_key(key, OP_NOOP);
       break;

@@ -28,11 +28,13 @@ typedef enum {
   SOCKS5_STATE_REQUEST_READ,
   SOCKS5_STATE_CONNECTING,
   SOCKS5_STATE_REQUEST_WRITE,
+  SOCKS5_STATE_RELAY,
   SOCKS5_STATE_DONE,
   SOCKS5_STATE_ERROR,
 } socks5_state;
 
 typedef enum {
+  SOCKS5_ACTION_NONE,
   SOCKS5_ACTION_NOOP,
   SOCKS5_ACTION_READ,
   SOCKS5_ACTION_WRITE,
@@ -44,10 +46,13 @@ struct socks5 {
   int client_fd;
   int origin_fd;
   bool origin_registered;
+  bool relay_started;
+  bool client_eof;
+  bool origin_eof;
   uint8_t raw_read_buffer[4096];
   uint8_t raw_write_buffer[4096];
-  buffer read_buffer;
-  buffer write_buffer;
+  buffer read_buffer; // used as client-to-origin buffer during relay
+  buffer write_buffer;// used as origin-to-client buffer during relay
   struct hello_parser hello;
   struct auth_parser auth;
   struct request_parser request;
@@ -61,7 +66,14 @@ void socks5_init(struct socks5 *socks);
 void socks5_destroy(struct socks5 *socks);
 void socks5_set_client_fd(struct socks5 *socks, int client_fd);
 void socks5_unregister_origin(struct socks5 *socks, fd_selector selector);
-socks5_action socks5_handle_read(struct socks5 *socks, struct selector_key *key);
-socks5_action socks5_handle_write(struct socks5 *socks, struct selector_key *key);
+bool socks5_is_relaying(struct socks5 *socks);
+socks5_action
+socks5_relay_client_read(struct socks5 *socks, struct selector_key *key);
+socks5_action
+socks5_relay_client_write(struct socks5 *socks, struct selector_key *key);
+socks5_action
+socks5_handle_read(struct socks5 *socks, struct selector_key *key);
+socks5_action
+socks5_handle_write(struct socks5 *socks, struct selector_key *key);
 
 #endif

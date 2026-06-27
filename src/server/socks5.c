@@ -22,12 +22,14 @@ static void request_read_init(const unsigned state, struct selector_key *key);
 static unsigned request_read(struct selector_key *key);
 static unsigned request_write(struct selector_key *key);
 static void origin_connect_write(struct selector_key *key);
+static void origin_read(struct selector_key *key);
+static void origin_write(struct selector_key *key);
 static void origin_connect_close(struct selector_key *key);
 
-// Selector callbacks for the upstream/origin fd while connect() is pending.
+// Selector callbacks for the upstream/origin fd during connect and relay.
 static const struct fd_handler origin_connect_handler = {
-  .handle_read = NULL,
-  .handle_write = origin_connect_write,
+  .handle_read = origin_read,
+  .handle_write = origin_write,
   .handle_block = NULL,
   .handle_close = origin_connect_close,
 };
@@ -63,6 +65,9 @@ static const struct state_definition socks5_states[] = {
   {
     .state = SOCKS5_STATE_REQUEST_WRITE,
     .on_write_ready = request_write,
+  },
+  {
+    .state = SOCKS5_STATE_RELAY,
   },
   {
     .state = SOCKS5_STATE_DONE,
@@ -114,6 +119,105 @@ void socks5_unregister_origin(struct socks5 *socks, fd_selector selector) {
   }
 }
 
+bool socks5_is_relaying(struct socks5 *socks) { return socks->relay_started; }
+
+// Decides if one side is done and its pending relay data has been drained.
+static bool relay_should_close(struct socks5 *socks) {
+  return (socks->client_eof && !buffer_can_read(&socks->read_buffer)) ||
+         (socks->origin_eof && !buffer_can_read(&socks->write_buffer));
+}
+
+// Closes both relay fds and unregisters them from the selector.
+static void relay_close(struct socks5 *socks, fd_selector selector) {
+  const int client_fd = socks->client_fd;
+
+  if (socks->origin_registered && socks->origin_fd >= 0) {
+    selector_unregister_fd(selector, socks->origin_fd);
+    socks->origin_registered = false;
+  }
+  if (socks->origin_fd >= 0) {
+    close(socks->origin_fd);
+    socks->origin_fd = -1;
+  }
+  if (client_fd >= 0) {
+    selector_unregister_fd(selector, client_fd);
+    close(client_fd);
+  }
+}
+
+// Recomputes read/write interests from relay buffer state.
+static void relay_update_interests(struct socks5 *socks, fd_selector selector) {
+  fd_interest client_interest = OP_NOOP;
+  fd_interest origin_interest = OP_NOOP;
+
+  if (!socks->client_eof && buffer_can_write(&socks->read_buffer)) {
+    client_interest |= OP_READ;
+  }
+  if (buffer_can_read(&socks->write_buffer)) { client_interest |= OP_WRITE; }
+
+  if (!socks->origin_eof && buffer_can_write(&socks->write_buffer)) {
+    origin_interest |= OP_READ;
+  }
+  if (buffer_can_read(&socks->read_buffer)) { origin_interest |= OP_WRITE; }
+
+  selector_set_interest(selector, socks->client_fd, client_interest);
+  selector_set_interest(selector, socks->origin_fd, origin_interest);
+}
+
+// Switches from SOCKS negotiation to raw bidirectional relay.
+static unsigned start_relay(struct socks5 *socks, fd_selector selector) {
+  socks->relay_started = true;
+  socks->client_eof = false;
+  socks->origin_eof = false;
+  buffer_reset(&socks->read_buffer);
+  buffer_reset(&socks->write_buffer);
+  relay_update_interests(socks, selector);// good use of API ദ്ദി（• ˕ •)マ
+  return SOCKS5_STATE_RELAY;
+}
+
+// Treats nonblocking would-block errors as normal selector flow.
+static bool is_retryable_io_error(void) {
+  return errno == EAGAIN || errno == EWOULDBLOCK;
+}
+
+// Reads client bytes into the client-to-origin relay buffer.
+socks5_action
+socks5_relay_client_read(struct socks5 *socks, struct selector_key *key) {
+  size_t count;
+  uint8_t *ptr = buffer_write_ptr(&socks->read_buffer, &count);
+  const ssize_t bytes = read(key->fd, ptr, count);
+
+  if (bytes > 0) {
+    buffer_write_adv(&socks->read_buffer, bytes);
+  } else if (bytes == 0) {
+    socks->client_eof = true;
+  } else if (!is_retryable_io_error()) {
+    return SOCKS5_ACTION_CLOSE;
+  }
+
+  if (relay_should_close(socks)) { return SOCKS5_ACTION_CLOSE; }
+  relay_update_interests(socks, key->s);
+  return SOCKS5_ACTION_NOOP;
+}
+
+// Writes origin bytes from the origin-to-client relay buffer.
+socks5_action
+socks5_relay_client_write(struct socks5 *socks, struct selector_key *key) {
+  size_t count;
+  uint8_t *ptr = buffer_read_ptr(&socks->write_buffer, &count);
+  const ssize_t bytes = write(key->fd, ptr, count);
+
+  if (bytes > 0) {
+    buffer_read_adv(&socks->write_buffer, bytes);
+  } else if (bytes < 0 && !is_retryable_io_error()) {
+    return SOCKS5_ACTION_CLOSE;
+  }
+
+  if (relay_should_close(socks)) { return SOCKS5_ACTION_CLOSE; }
+  relay_update_interests(socks, key->s);
+  return SOCKS5_ACTION_NOOP;
+}
+
 socks5_action
 socks5_handle_read(struct socks5 *socks, struct selector_key *key) {
   // esto llama al read que corresponda segun el state, osea hello_read o auth_read etc idem lors otros stm_handler
@@ -124,6 +228,7 @@ socks5_handle_read(struct socks5 *socks, struct selector_key *key) {
   }
   // Pause the client fd while the origin fd completes connect().
   if (state == SOCKS5_STATE_CONNECTING) { return SOCKS5_ACTION_NOOP; }
+  if (state == SOCKS5_STATE_RELAY) { return SOCKS5_ACTION_NONE; }
   return buffer_can_read(&socks->write_buffer) ? SOCKS5_ACTION_WRITE
                                                : SOCKS5_ACTION_READ;
 }
@@ -137,6 +242,7 @@ socks5_handle_write(struct socks5 *socks, struct selector_key *key) {
   }
   // Pause the client fd while the origin fd completes connect().
   if (state == SOCKS5_STATE_CONNECTING) { return SOCKS5_ACTION_NOOP; }
+  if (state == SOCKS5_STATE_RELAY) { return SOCKS5_ACTION_NONE; }
   return buffer_can_read(&socks->write_buffer) ? SOCKS5_ACTION_WRITE
                                                : SOCKS5_ACTION_READ;
 }
@@ -266,6 +372,14 @@ static int register_origin_connect(
 
   if (connect(fd, addr, addr_len) == 0) {
     socks->origin_fd = fd;
+    selector_status ss =
+      selector_register(key->s, fd, &origin_connect_handler, OP_NOOP, socks);
+    if (ss != SELECTOR_SUCCESS) {
+      close(fd);
+      socks->origin_fd = -1;
+      return ECONNREFUSED;
+    }
+    socks->origin_registered = true;
     socks->request_reply = SOCKS5_REPLY_SUCCEEDED;
     return 0;
   }
@@ -314,12 +428,14 @@ static int start_ipv6_connect(struct socks5 *socks, struct selector_key *key) {
 }
 
 // Placeholder for future domain/DNS support.
-static int start_domain_connect(struct socks5 *socks, struct selector_key *key) {
+static int
+start_domain_connect(struct socks5 *socks, struct selector_key *key) {
   return EHOSTUNREACH;
 }
 
 // Chooses the origin connect path for the request address type.
-static int start_origin_connect(struct socks5 *socks, struct selector_key *key) {
+static int
+start_origin_connect(struct socks5 *socks, struct selector_key *key) {
   switch (socks->request.atyp) {
     case SOCKS5_ATYP_IPV4:
       return start_ipv4_connect(socks, key);
@@ -363,13 +479,17 @@ static unsigned request_read(struct selector_key *key) {
   return marshall_request_reply(socks);
 }
 
+// Sends the SOCKS reply, then starts relay only on success.
 static unsigned request_write(struct selector_key *key) {
   struct socks5 *socks = key->data;
 
   if (buffer_can_read(&socks->write_buffer)) {
     return SOCKS5_STATE_REQUEST_WRITE;
   }
-  return SOCKS5_STATE_DONE;
+  if (socks->request_reply != SOCKS5_REPLY_SUCCEEDED) {
+    return SOCKS5_STATE_DONE;
+  }
+  return start_relay(socks, key->s);
 }
 
 // Finishes a pending nonblocking connect and wakes the client to send the reply.
@@ -382,10 +502,16 @@ static void origin_connect_write(struct selector_key *key) {
     error = errno;
   }
 
-  socks->origin_registered = false;
-  selector_unregister_fd(key->s, key->fd);
-
   socks->request_reply = socks5_reply_from_errno(error);
+  if (error != 0) {
+    socks->origin_registered = false;
+    selector_unregister_fd(key->s, key->fd);
+    close(key->fd);
+    socks->origin_fd = -1;
+  } else {
+    selector_set_interest(key->s, key->fd, OP_NOOP);
+  }
+
   if (marshall_request_reply(socks) == SOCKS5_STATE_ERROR) {
     socks->stm.current = socks->stm.states + SOCKS5_STATE_ERROR;
     selector_set_interest(key->s, socks->client_fd, OP_READ);
@@ -394,6 +520,56 @@ static void origin_connect_write(struct selector_key *key) {
 
   socks->stm.current = socks->stm.states + SOCKS5_STATE_REQUEST_WRITE;
   selector_set_interest(key->s, socks->client_fd, OP_WRITE);
+}
+
+// Reads origin bytes into the origin-to-client relay buffer.
+static void origin_read(struct selector_key *key) {
+  struct socks5 *socks = key->data;
+  size_t count;
+  uint8_t *ptr = buffer_write_ptr(&socks->write_buffer, &count);
+  const ssize_t bytes = read(key->fd, ptr, count);
+
+  if (bytes > 0) {
+    buffer_write_adv(&socks->write_buffer, bytes);
+  } else if (bytes == 0) {
+    socks->origin_eof = true;
+  } else if (!is_retryable_io_error()) {
+    relay_close(socks, key->s);
+    return;
+  }
+
+  if (relay_should_close(socks)) {
+    relay_close(socks, key->s);
+    return;
+  }
+  relay_update_interests(socks, key->s);
+}
+
+// Writes client bytes from the client-to-origin relay buffer.
+static void origin_write(struct selector_key *key) {
+  struct socks5 *socks = key->data;
+
+  if (!socks->relay_started) {
+    origin_connect_write(key);
+    return;
+  }
+
+  size_t count;
+  uint8_t *ptr = buffer_read_ptr(&socks->read_buffer, &count);
+  const ssize_t bytes = write(key->fd, ptr, count);
+
+  if (bytes > 0) {
+    buffer_read_adv(&socks->read_buffer, bytes);
+  } else if (bytes < 0 && !is_retryable_io_error()) {
+    relay_close(socks, key->s);
+    return;
+  }
+
+  if (relay_should_close(socks)) {
+    relay_close(socks, key->s);
+    return;
+  }
+  relay_update_interests(socks, key->s);
 }
 
 // Marks the origin fd as no longer registered in the selector.
