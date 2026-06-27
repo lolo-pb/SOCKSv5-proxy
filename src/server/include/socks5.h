@@ -1,6 +1,7 @@
 #ifndef SOCKS5_H
 #define SOCKS5_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
@@ -25,12 +26,14 @@ typedef enum {
   SOCKS5_STATE_AUTH_READ,
   SOCKS5_STATE_AUTH_WRITE,
   SOCKS5_STATE_REQUEST_READ,
+  SOCKS5_STATE_CONNECTING,
   SOCKS5_STATE_REQUEST_WRITE,
   SOCKS5_STATE_DONE,
   SOCKS5_STATE_ERROR,
 } socks5_state;
 
 typedef enum {
+  SOCKS5_ACTION_NOOP,
   SOCKS5_ACTION_READ,
   SOCKS5_ACTION_WRITE,
   SOCKS5_ACTION_CLOSE,
@@ -38,6 +41,9 @@ typedef enum {
 
 struct socks5 {
   struct state_machine stm;
+  int client_fd;
+  int origin_fd;
+  bool origin_registered;
   uint8_t raw_read_buffer[4096];
   uint8_t raw_write_buffer[4096];
   buffer read_buffer;
@@ -52,6 +58,9 @@ struct socks5 {
 
 void socks5_set_args(struct socks5args *args);
 void socks5_init(struct socks5 *socks);
+void socks5_destroy(struct socks5 *socks);
+void socks5_set_client_fd(struct socks5 *socks, int client_fd);
+void socks5_unregister_origin(struct socks5 *socks, fd_selector selector);
 socks5_action socks5_handle_read(struct socks5 *socks, struct selector_key *key);
 socks5_action socks5_handle_write(struct socks5 *socks, struct selector_key *key);
 

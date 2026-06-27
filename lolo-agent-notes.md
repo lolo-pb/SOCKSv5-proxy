@@ -72,6 +72,12 @@ Useful server args:
 ./bin/server -p 1080 -l 0.0.0.0 -u user:pass
 ```
 
+## Code Preferences
+
+Do not silence unused parameters with casts like `(void) key;`. If a parameter
+is unused because it belongs to a future stub or callback signature, prefer
+leaving it plainly unused.
+
 ## Main Runtime Flow
 
 1. `src/server/main.c` parses CLI args into `struct socks5args`.

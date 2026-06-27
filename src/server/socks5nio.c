@@ -43,6 +43,7 @@ void socksv5_passive_accept(struct selector_key *key) {
     return;
   }
   socks5_init(state);
+  socks5_set_client_fd(state, client);
 
   selector_status ss =
     selector_register(key->s, client, &socksv5_handler, OP_READ, state);
@@ -51,7 +52,7 @@ void socksv5_passive_accept(struct selector_key *key) {
       stderr, "unable to register client fd=%d: %s\n", client,
       selector_error(ss)
     );
-    free(state);
+    socks5_destroy(state);
     close(client);
     return;
   }
@@ -78,7 +79,11 @@ static void socksv5_read(struct selector_key *key) {
   socksv5_apply_action(key, action);
 }
 
-static void socksv5_close(struct selector_key *key) { free(key->data); }
+static void socksv5_close(struct selector_key *key) {
+  struct socks5 *state = key->data;
+  socks5_unregister_origin(state, key->s);
+  socks5_destroy(state);
+}
 
 static void socksv5_write(struct selector_key *key) {
   struct socks5 *state = key->data;
@@ -110,6 +115,9 @@ static void socksv5_write(struct selector_key *key) {
 static void
 socksv5_apply_action(struct selector_key *key, const socks5_action action) {
   switch (action) {
+    case SOCKS5_ACTION_NOOP:
+      selector_set_interest_key(key, OP_NOOP);
+      break;
     case SOCKS5_ACTION_READ:
       selector_set_interest_key(key, OP_READ);
       break;

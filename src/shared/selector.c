@@ -345,6 +345,8 @@ finally:
 selector_status selector_unregister_fd(fd_selector s, const int fd) {
   selector_status ret = SELECTOR_SUCCESS;
 
+  // Important: this does not call close(fd). It only unregisters the fd from
+  // the event loop. The caller is responsible for closing the OS fd.
   if (NULL == s || INVALID_FD(fd)) {
     ret = SELECTOR_IARGS;
     goto finally;
