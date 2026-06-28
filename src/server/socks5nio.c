@@ -18,7 +18,7 @@ socksv5_apply_action(struct selector_key *key, socks5_action action);
 static const struct fd_handler socksv5_handler = {
   .handle_read = socksv5_read,
   .handle_write = socksv5_write,
-  .handle_block = NULL,
+  .handle_block_done = NULL,
   .handle_close = socksv5_close,
 };
 

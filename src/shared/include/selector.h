@@ -121,7 +121,7 @@ struct selector_key {
 typedef struct fd_handler {
   void (*handle_read)(struct selector_key *key);
   void (*handle_write)(struct selector_key *key);
-  void (*handle_block)(struct selector_key *key);
+  void (*handle_block_done)(struct selector_key *key);
 
   /**
    * llamado cuando se se desregistra el fd

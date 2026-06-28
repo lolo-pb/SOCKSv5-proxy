@@ -30,7 +30,7 @@ static void origin_connect_close(struct selector_key *key);
 static const struct fd_handler origin_connect_handler = {
   .handle_read = origin_read,
   .handle_write = origin_write,
-  .handle_block = NULL,
+  .handle_block_done = NULL,
   .handle_close = origin_connect_close,
 };
 

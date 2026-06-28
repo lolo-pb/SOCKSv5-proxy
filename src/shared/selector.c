@@ -458,7 +458,9 @@ static void handle_block_notifications(fd_selector s) {
     if (ITEM_USED(item)) {
       key.fd = item->fd;
       key.data = item->data;
-      item->handler->handle_block(&key);
+      if (item->handler->handle_block_done != NULL) {
+        item->handler->handle_block_done(&key);
+      }
     }
 
     struct blocking_job *aux = j;
