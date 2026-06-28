@@ -20,6 +20,10 @@
 #define AUTH_STATUS_SUCCESS 0x00
 #define AUTH_STATUS_FAILURE 0x01
 
+struct addrinfo;
+// That is a forward declaration, real definition comes
+// from <netdb.h> in socks5.c.
+
 typedef enum {
   SOCKS5_STATE_HELLO_READ,
   SOCKS5_STATE_HELLO_WRITE,
@@ -49,6 +53,9 @@ struct socks5 {
   bool relay_started;
   bool client_eof;
   bool origin_eof;
+  bool dns_pending;
+  int dns_error;
+  struct addrinfo *dns_result;
   uint8_t raw_read_buffer[4096];
   uint8_t raw_write_buffer[4096];
   buffer read_buffer; // used as client-to-origin buffer during relay
@@ -75,5 +82,7 @@ socks5_action
 socks5_handle_read(struct socks5 *socks, struct selector_key *key);
 socks5_action
 socks5_handle_write(struct socks5 *socks, struct selector_key *key);
+socks5_action
+socks5_handle_block_done(struct socks5 *socks, struct selector_key *key);
 
 #endif

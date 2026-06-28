@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -21,6 +22,9 @@ static unsigned auth_write(struct selector_key *key);
 static void request_read_init(const unsigned state, struct selector_key *key);
 static unsigned request_read(struct selector_key *key);
 static unsigned request_write(struct selector_key *key);
+static uint8_t socks5_reply_from_errno(const int error);
+static int start_origin_connect(struct socks5 *socks, struct selector_key *key);
+static unsigned marshall_request_reply(struct socks5 *socks);
 static void origin_connect_write(struct selector_key *key);
 static void origin_read(struct selector_key *key);
 static void origin_write(struct selector_key *key);
@@ -102,6 +106,10 @@ void socks5_destroy(struct socks5 *socks) {
   if (socks->origin_fd >= 0) {
     close(socks->origin_fd);
     socks->origin_fd = -1;
+  }
+  if (socks->dns_result != NULL) {
+    freeaddrinfo(socks->dns_result);
+    socks->dns_result = NULL;
   }
   free(socks);
 }
@@ -245,6 +253,25 @@ socks5_handle_write(struct socks5 *socks, struct selector_key *key) {
   if (state == SOCKS5_STATE_RELAY) { return SOCKS5_ACTION_NONE; }
   return buffer_can_read(&socks->write_buffer) ? SOCKS5_ACTION_WRITE
                                                : SOCKS5_ACTION_READ;
+}
+
+socks5_action
+socks5_handle_block_done(struct socks5 *socks, struct selector_key *key) {
+  socks->dns_pending = false;
+
+  const int connect_status = start_origin_connect(socks, key);
+  if (connect_status == EINPROGRESS) {
+    socks->stm.current = socks->stm.states + SOCKS5_STATE_CONNECTING;
+    return SOCKS5_ACTION_NOOP;
+  }
+
+  socks->request_reply = socks5_reply_from_errno(connect_status);
+  if (marshall_request_reply(socks) == SOCKS5_STATE_ERROR) {
+    socks->stm.current = socks->stm.states + SOCKS5_STATE_ERROR;
+    return SOCKS5_ACTION_CLOSE;
+  }
+  socks->stm.current = socks->stm.states + SOCKS5_STATE_REQUEST_WRITE;
+  return SOCKS5_ACTION_WRITE;
 }
 
 static void on_hello_method(struct hello_parser *p, const uint8_t method) {
@@ -427,7 +454,27 @@ static int start_ipv6_connect(struct socks5 *socks, struct selector_key *key) {
   );
 }
 
-// Placeholder for future domain/DNS support.
+// Tries the resolved addresses until a nonblocking origin connect starts.
+static int
+start_resolved_connect(struct socks5 *socks, struct selector_key *key) {
+  if (socks->dns_error != 0 || socks->dns_result == NULL) {
+    return EHOSTUNREACH;
+  }
+
+  int last_error = EHOSTUNREACH;
+  for (struct addrinfo *ai = socks->dns_result; ai != NULL; ai = ai->ai_next) {
+    if (ai->ai_socktype != SOCK_STREAM) { continue; }
+
+    const int status =
+      register_origin_connect(socks, key, ai->ai_addr, ai->ai_addrlen);
+    if (status == 0 || status == EINPROGRESS) { return status; }
+    last_error = status;
+  }
+  return last_error;
+}
+
+// Starts the DNS path for domain-name requests. The next step is spawning the
+// DNS worker thread that fills dns_result/dns_error and notifies the selector.
 static int
 start_domain_connect(struct socks5 *socks, struct selector_key *key) {
   return EHOSTUNREACH;
@@ -442,6 +489,9 @@ start_origin_connect(struct socks5 *socks, struct selector_key *key) {
     case SOCKS5_ATYP_IPV6:
       return start_ipv6_connect(socks, key);
     case SOCKS5_ATYP_DOMAINNAME:
+      if (socks->dns_result != NULL || socks->dns_error != 0) {
+        return start_resolved_connect(socks, key);
+      }
       return start_domain_connect(socks, key);
     default:
       return EAFNOSUPPORT;

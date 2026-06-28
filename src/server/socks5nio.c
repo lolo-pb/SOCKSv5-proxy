@@ -11,6 +11,7 @@
 
 static void socksv5_read(struct selector_key *key);
 static void socksv5_write(struct selector_key *key);
+static void socksv5_block_done(struct selector_key *key);
 static void socksv5_close(struct selector_key *key);
 static void
 socksv5_apply_action(struct selector_key *key, socks5_action action);
@@ -18,7 +19,7 @@ socksv5_apply_action(struct selector_key *key, socks5_action action);
 static const struct fd_handler socksv5_handler = {
   .handle_read = socksv5_read,
   .handle_write = socksv5_write,
-  .handle_block_done = NULL,
+  .handle_block_done = socksv5_block_done,
   .handle_close = socksv5_close,
 };
 
@@ -88,6 +89,13 @@ static void socksv5_close(struct selector_key *key) {
   struct socks5 *state = key->data;
   socks5_unregister_origin(state, key->s);
   socks5_destroy(state);
+}
+
+static void socksv5_block_done(struct selector_key *key) {
+  struct socks5 *state = key->data;
+  const socks5_action action = socks5_handle_block_done(state, key);
+
+  socksv5_apply_action(key, action);
 }
 
 static void socksv5_write(struct selector_key *key) {
