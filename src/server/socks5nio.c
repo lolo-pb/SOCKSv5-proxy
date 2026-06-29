@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +16,7 @@ static void socksv5_block_done(struct selector_key *key);
 static void socksv5_close(struct selector_key *key);
 static void
 socksv5_apply_action(struct selector_key *key, socks5_action action);
+static bool socksv5_retryable_io_error(void);
 
 static const struct fd_handler socksv5_handler = {
   .handle_read = socksv5_read,
@@ -72,7 +74,16 @@ static void socksv5_read(struct selector_key *key) {
   uint8_t *ptr = buffer_write_ptr(&state->read_buffer, &count);
   const ssize_t bytes = read(key->fd, ptr, count);
 
-  if (bytes <= 0) {// error or EOF
+  if (bytes == 0) {// EOF
+    selector_unregister_fd(key->s, key->fd);
+    fprintf(stderr, "closing fd=%d ...\n", key->fd);
+    close(key->fd);
+    return;
+  } else if (bytes < 0) {
+    if (socksv5_retryable_io_error()) {
+      selector_set_interest_key(key, OP_READ);
+      return;
+    }
     selector_unregister_fd(key->s, key->fd);
     fprintf(stderr, "closing fd=%d ...\n", key->fd);
     close(key->fd);
@@ -109,7 +120,16 @@ static void socksv5_write(struct selector_key *key) {
   uint8_t *ptr = buffer_read_ptr(&state->write_buffer, &count);
   const ssize_t bytes = write(key->fd, ptr, count);
 
-  if (bytes <= 0) {
+  if (bytes == 0) {
+    selector_unregister_fd(key->s, key->fd);
+    fprintf(stderr, "closing fd=%d ...\n", key->fd);
+    close(key->fd);
+    return;
+  } else if (bytes < 0) {
+    if (socksv5_retryable_io_error()) {
+      selector_set_interest_key(key, OP_WRITE);
+      return;
+    }
     selector_unregister_fd(key->s, key->fd);
     fprintf(stderr, "closing fd=%d ...\n", key->fd);
     close(key->fd);
@@ -154,4 +174,8 @@ socksv5_apply_action(struct selector_key *key, const socks5_action action) {
 
 void socksv5_pool_destroy(void) {
   // TODO: liberar pool de conexiones
+}
+
+static bool socksv5_retryable_io_error(void) {
+  return errno == EAGAIN || errno == EWOULDBLOCK;
 }

@@ -2,6 +2,9 @@
 
 #include "socks5.h"
 
+#include <netinet/in.h>
+#include <string.h>
+
 void request_parser_init(struct request_parser *p) {
   p->state = request_version;
   p->command = 0;
@@ -95,20 +98,48 @@ request_consume(buffer *b, struct request_parser *p, bool *errored) {
   return st;
 }
 
-int request_marshall_reply(buffer *b, const uint8_t reply) {
+int request_marshall_reply(
+  buffer *b, const uint8_t reply, const struct sockaddr *bind_addr,
+  const socklen_t bind_addr_len
+) {
   size_t n;
   uint8_t *buff = buffer_write_ptr(b, &n);
-  if (n < 10) { return -1; }
+
+  uint8_t atyp = SOCKS5_ATYP_IPV4;
+  const void *addr = NULL;
+  const void *port = NULL;
+  size_t addr_len = 4;
+  uint8_t zero_addr[16] = {0};
+  uint8_t zero_port[2] = {0};
+
+  addr = zero_addr;
+  port = zero_port;
+
+  if (bind_addr != NULL && bind_addr->sa_family == AF_INET &&
+      bind_addr_len >= sizeof(struct sockaddr_in)) {
+    const struct sockaddr_in *in = (const struct sockaddr_in *) bind_addr;
+    atyp = SOCKS5_ATYP_IPV4;
+    addr = &in->sin_addr.s_addr;
+    port = &in->sin_port;
+    addr_len = 4;
+  } else if (bind_addr != NULL && bind_addr->sa_family == AF_INET6 &&
+             bind_addr_len >= sizeof(struct sockaddr_in6)) {
+    const struct sockaddr_in6 *in6 = (const struct sockaddr_in6 *) bind_addr;
+    atyp = SOCKS5_ATYP_IPV6;
+    addr = &in6->sin6_addr.s6_addr;
+    port = &in6->sin6_port;
+    addr_len = 16;
+  }
+
+  const size_t reply_len = 4 + addr_len + 2;
+  if (n < reply_len) { return -1; }
+
   buff[0] = SOCKS5_VERSION;
   buff[1] = reply;
   buff[2] = 0x00;
-  buff[3] = SOCKS5_ATYP_IPV4;
-  buff[4] = 0x00;
-  buff[5] = 0x00;
-  buff[6] = 0x00;
-  buff[7] = 0x00;
-  buff[8] = 0x00;
-  buff[9] = 0x00;
-  buffer_write_adv(b, 10);
-  return 10;
+  buff[3] = atyp;
+  memcpy(buff + 4, addr, addr_len);
+  memcpy(buff + 4 + addr_len, port, 2);
+  buffer_write_adv(b, (ssize_t) reply_len);
+  return (int) reply_len;
 }

@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <sys/socket.h>
 
 #include "buffer.h"
 
@@ -65,6 +66,9 @@ request_consume(buffer *b, struct request_parser *p, bool *errored);
 bool request_is_done(const enum request_state state, bool *errored);
 
 /** Build a SOCKS5 request reply into the output buffer. */
-int request_marshall_reply(buffer *b, const uint8_t reply);
+int request_marshall_reply(
+  buffer *b, const uint8_t reply, const struct sockaddr *bind_addr,
+  const socklen_t bind_addr_len
+);
 
 #endif

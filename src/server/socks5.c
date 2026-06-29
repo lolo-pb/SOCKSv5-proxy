@@ -596,8 +596,20 @@ start_origin_connect(struct socks5 *socks, struct selector_key *key) {
 
 // Writes the SOCKS request reply into the client output buffer.
 static unsigned marshall_request_reply(struct socks5 *socks) {
+  struct sockaddr_storage bind_addr;
+  struct sockaddr *addr = NULL;
+  socklen_t addr_len = sizeof(bind_addr);
+
+  if (socks->request_reply == SOCKS5_REPLY_SUCCEEDED && socks->origin_fd >= 0 &&
+      getsockname(socks->origin_fd, (struct sockaddr *) &bind_addr, &addr_len) ==
+        0) {
+    addr = (struct sockaddr *) &bind_addr;
+  }
+
   if (-1 ==
-      request_marshall_reply(&socks->write_buffer, socks->request_reply)) {
+      request_marshall_reply(
+        &socks->write_buffer, socks->request_reply, addr, addr_len
+      )) {
     return SOCKS5_STATE_ERROR;
   }
   return SOCKS5_STATE_REQUEST_WRITE;
@@ -611,7 +623,9 @@ static unsigned request_read(struct selector_key *key) {
     request_consume(&socks->read_buffer, &socks->request, &error);
 
   if (error) {
-    socks->request_reply = SOCKS5_REPLY_ADDRESS_TYPE_NOT_SUPPORTED;
+    socks->request_reply = state == request_error_unsupported_atyp
+                             ? SOCKS5_REPLY_ADDRESS_TYPE_NOT_SUPPORTED
+                             : SOCKS5_REPLY_GENERAL_FAILURE;
   } else if (!request_is_done(state, NULL)) {
     return SOCKS5_STATE_REQUEST_READ;
   } else if (socks->request.command != SOCKS5_CMD_CONNECT) {

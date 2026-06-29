@@ -141,7 +141,11 @@ Current protocol support:
 - SOCKS5 hello parsing.
 - Username/password method selection (`0x02`).
 - Username/password auth parsing and response.
-- Request state exists, but real CONNECT handling is not implemented yet.
+- CONNECT request parsing.
+- IPv4, IPv6, and domain-name origin connection attempts.
+- Async DNS resolution for domain requests.
+- Nonblocking origin connect.
+- Bidirectional relay after successful CONNECT.
 
 `src/server/hello.c`
 Parser/marshaller for the SOCKS5 hello/auth-method negotiation message.
@@ -177,6 +181,31 @@ Shared network helpers.
 
 ## Suggestions / Uncertainty
 
-CONNECT request parsing and upstream connection handling are not implemented yet. `socks5.c` currently reaches `SOCKS5_STATE_REQUEST_READ`, resets the read buffer, and ends the connection.
+The note is outdated. The SOCKS5 core is no longer missing CONNECT entirely: it has hello, username/password auth, request parsing, IPv4/IPv6/domain connect, async DNS, nonblocking connect, and relay.
+
+What’s still missing or weak in the SOCKS5 part:
+
+1. FQDN multi-address fallback is incomplete  
+   `socks5.c` tries resolved addresses only until one `connect()` starts. If that async connect later fails in `origin_connect_write`, it replies failure instead of trying the next resolved address. The TP explicitly asks for trying other IPs when an FQDN resolves to multiple addresses.
+
+2. SOCKS reply does not report real bind address/port  
+   `request_marshall_reply` always sends `0.0.0.0:0`. Many clients tolerate this, but RFC1928 expects `BND.ADDR`/`BND.PORT` from the proxy-side socket. For “report failures using all protocol power,” this is a visible weakness.
+
+3. Nonblocking negotiation I/O treats `EAGAIN` as fatal  
+   In `socks5nio.c`, `read()`/`write()` returning `-1` closes immediately. For nonblocking sockets, `EAGAIN`/`EWOULDBLOCK` should just keep the interest. Relay code already handles this correctly.
+
+4. Auth method selection only accepts username/password  
+   `socks5.c` ignores no-auth. That may be fine if the project requires auth for all proxy users, but if tests expect `NO AUTHENTICATION REQUIRED` support, it will fail.
+
+5. Request error mapping is too coarse  
+   Bad request version or bad reserved byte currently becomes `ADDRESS_TYPE_NOT_SUPPORTED` through `request_read`. Unsupported ATYP should be `0x08`, unsupported command should be `0x07`, but malformed version/RSV should probably be general failure.
+
+6. Half-close relay behavior is probably too aggressive  
+   `relay_should_close` closes the whole tunnel when either side EOFs and its pending buffer drains. A more transparent proxy should `shutdown()` one direction and keep the other direction alive until both sides are done.
+
+7. Cleanup/pool shutdown is unfinished  
+   `socksv5_pool_destroy` is still TODO, and graceful shutdown in `main.c` stops the loop rather than stopping accepts and waiting for active connections.
+
+Build status: `make` passes.
 
 The name `socksv5` appears in the NIO code, while the protocol is usually written `socks5`. This is harmless but can be confusing when reading the split between socket glue and protocol code.
