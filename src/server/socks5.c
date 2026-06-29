@@ -8,6 +8,7 @@
 
 #include <netdb.h>
 #include <netinet/in.h>
+#include <pthread.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -29,6 +30,18 @@ static void origin_connect_write(struct selector_key *key);
 static void origin_read(struct selector_key *key);
 static void origin_write(struct selector_key *key);
 static void origin_connect_close(struct selector_key *key);
+
+// struct to pass dns thread data to main thred
+struct dns_job {
+  struct socks5 *socks;
+  fd_selector selector;
+  int client_fd;
+  char host[256];
+  char service[6];
+};
+
+static void *dns_worker(void *data);
+static void socks5_release_block_data(void *data);
 
 // Selector callbacks for the upstream/origin fd during connect and relay.
 static const struct fd_handler origin_connect_handler = {
@@ -85,8 +98,10 @@ void socks5_set_args(struct socks5args *args) { socks5_args = args; }
 
 void socks5_init(struct socks5 *socks) {
   memset(socks, 0, sizeof(*socks));
+  atomic_init(&socks->references, 1);
   socks->client_fd = -1;
   socks->origin_fd = -1;
+  pthread_mutex_init(&socks->dns_mutex, NULL);
   socks->stm.initial = SOCKS5_STATE_HELLO_READ;
   socks->stm.states = socks5_states;
   socks->stm.max_state = SOCKS5_STATE_ERROR;
@@ -100,9 +115,8 @@ void socks5_init(struct socks5 *socks) {
   );
 }
 
-// Frees the SOCKS state and closes any origin fd it still owns.
-void socks5_destroy(struct socks5 *socks) {
-  if (socks == NULL) { return; }
+// Frees the SOCKS state once every owner has released its reference.
+static void socks5_free(struct socks5 *socks) {
   if (socks->origin_fd >= 0) {
     close(socks->origin_fd);
     socks->origin_fd = -1;
@@ -111,8 +125,29 @@ void socks5_destroy(struct socks5 *socks) {
     freeaddrinfo(socks->dns_result);
     socks->dns_result = NULL;
   }
+  pthread_mutex_destroy(&socks->dns_mutex);
   free(socks);
 }
+
+void socks5_ref(struct socks5 *socks) {
+  if (socks == NULL) { return; }
+  atomic_fetch_add_explicit(&socks->references, 1, memory_order_relaxed);
+}
+
+// Releases one owner reference; the last release frees the SOCKS state.
+void socks5_release(struct socks5 *socks) {
+  if (socks == NULL) { return; }
+
+  const unsigned refs =
+    atomic_fetch_sub_explicit(&socks->references, 1, memory_order_acq_rel);
+  if (refs == 1) {
+    socks5_free(socks);
+  } else if (refs == 0) {
+    abort();
+  }
+}
+
+static void socks5_release_block_data(void *data) { socks5_release(data); }
 
 // Stores the accepted client fd so origin callbacks can resume client writes.
 void socks5_set_client_fd(struct socks5 *socks, const int client_fd) {
@@ -257,7 +292,9 @@ socks5_handle_write(struct socks5 *socks, struct selector_key *key) {
 
 socks5_action
 socks5_handle_block_done(struct socks5 *socks, struct selector_key *key) {
+  pthread_mutex_lock(&socks->dns_mutex);
   socks->dns_pending = false;
+  pthread_mutex_unlock(&socks->dns_mutex);
 
   const int connect_status = start_origin_connect(socks, key);
   if (connect_status == EINPROGRESS) {
@@ -454,6 +491,30 @@ static int start_ipv6_connect(struct socks5 *socks, struct selector_key *key) {
   );
 }
 
+static void *dns_worker(void *data) {
+  struct dns_job *job = data;
+  struct addrinfo hints;
+  struct addrinfo *result = NULL;
+
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+
+  const int error = getaddrinfo(job->host, job->service, &hints, &result);
+
+  pthread_mutex_lock(&job->socks->dns_mutex);
+  job->socks->dns_error = error;
+  job->socks->dns_result = result;
+  pthread_mutex_unlock(&job->socks->dns_mutex);
+
+  selector_status ss = selector_notify_block_done(
+    job->selector, job->client_fd, job->socks, socks5_release_block_data
+  );
+  if (ss != SELECTOR_SUCCESS) { socks5_release(job->socks); }
+  free(job);
+  return NULL;
+}
+
 // Tries the resolved addresses until a nonblocking origin connect starts.
 static int
 start_resolved_connect(struct socks5 *socks, struct selector_key *key) {
@@ -473,11 +534,45 @@ start_resolved_connect(struct socks5 *socks, struct selector_key *key) {
   return last_error;
 }
 
-// Starts the DNS path for domain-name requests. The next step is spawning the
-// DNS worker thread that fills dns_result/dns_error and notifies the selector.
+static void
+request_port_to_service(const struct socks5 *socks, char service[6]) {
+  const unsigned port =
+    ((unsigned) socks->request.port[0] << 8) | socks->request.port[1];
+  snprintf(service, 6, "%u", port);
+}
+
+// Starts asynchronous DNS resolution for domain-name requests.
 static int
 start_domain_connect(struct socks5 *socks, struct selector_key *key) {
-  return EHOSTUNREACH;
+  struct dns_job *job = malloc(sizeof(*job));
+  if (job == NULL) { return ENOMEM; }
+
+  job->socks = socks;
+  job->selector = key->s;
+  job->client_fd = socks->client_fd;
+  memcpy(job->host, socks->request.address, socks->request.address_len);
+  job->host[socks->request.address_len] = '\0';
+  request_port_to_service(socks, job->service);
+
+  pthread_mutex_lock(&socks->dns_mutex);
+  socks->dns_pending = true;
+  socks->dns_error = 0;
+  socks->dns_result = NULL;
+  pthread_mutex_unlock(&socks->dns_mutex);
+
+  socks5_ref(socks);
+  pthread_t thread;
+  const int status = pthread_create(&thread, NULL, dns_worker, job);
+  if (status != 0) {
+    socks5_release(socks);
+    free(job);
+    pthread_mutex_lock(&socks->dns_mutex);
+    socks->dns_pending = false;
+    pthread_mutex_unlock(&socks->dns_mutex);
+    return status;
+  }
+  pthread_detach(thread);
+  return EINPROGRESS;
 }
 
 // Chooses the origin connect path for the request address type.
@@ -489,6 +584,7 @@ start_origin_connect(struct socks5 *socks, struct selector_key *key) {
     case SOCKS5_ATYP_IPV6:
       return start_ipv6_connect(socks, key);
     case SOCKS5_ATYP_DOMAINNAME:
+      if (socks->dns_pending) { return EINPROGRESS; }
       if (socks->dns_result != NULL || socks->dns_error != 0) {
         return start_resolved_connect(socks, key);
       }

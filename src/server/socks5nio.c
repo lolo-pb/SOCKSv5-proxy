@@ -53,7 +53,7 @@ void socksv5_passive_accept(struct selector_key *key) {
       stderr, "unable to register client fd=%d: %s\n", client,
       selector_error(ss)
     );
-    socks5_destroy(state);
+    socks5_release(state);
     close(client);
     return;
   }
@@ -88,7 +88,7 @@ static void socksv5_read(struct selector_key *key) {
 static void socksv5_close(struct selector_key *key) {
   struct socks5 *state = key->data;
   socks5_unregister_origin(state, key->s);
-  socks5_destroy(state);
+  socks5_release(state);
 }
 
 static void socksv5_block_done(struct selector_key *key) {

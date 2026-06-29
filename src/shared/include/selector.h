@@ -174,6 +174,9 @@ selector_status selector_select(fd_selector s);
 int selector_fd_set_nio(const int fd);
 
 /** notifica que un trabajo bloqueante terminó */
-selector_status selector_notify_block_done(fd_selector s, const int fd);
+selector_status
+selector_notify_block_done(
+  fd_selector s, const int fd, void *data, void (*cleanup)(void *)
+);
 
 #endif

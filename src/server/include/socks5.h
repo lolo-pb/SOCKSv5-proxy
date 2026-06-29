@@ -1,6 +1,8 @@
 #ifndef SOCKS5_H
 #define SOCKS5_H
 
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -46,6 +48,7 @@ typedef enum {
 } socks5_action;
 
 struct socks5 {
+  atomic_uint references;
   struct state_machine stm;
   int client_fd;
   int origin_fd;
@@ -56,6 +59,8 @@ struct socks5 {
   bool dns_pending;
   int dns_error;
   struct addrinfo *dns_result;
+  pthread_mutex_t dns_mutex;// this is for dns response buffer writing it isnt
+                            // really needed but its beter practice so fuck it
   uint8_t raw_read_buffer[4096];
   uint8_t raw_write_buffer[4096];
   buffer read_buffer; // used as client-to-origin buffer during relay
@@ -70,7 +75,8 @@ struct socks5 {
 
 void socks5_set_args(struct socks5args *args);
 void socks5_init(struct socks5 *socks);
-void socks5_destroy(struct socks5 *socks);
+void socks5_ref(struct socks5 *socks);
+void socks5_release(struct socks5 *socks);
 void socks5_set_client_fd(struct socks5 *socks, int client_fd);
 void socks5_unregister_origin(struct socks5 *socks, fd_selector selector);
 bool socks5_is_relaying(struct socks5 *socks);

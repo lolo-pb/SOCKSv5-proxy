@@ -113,6 +113,8 @@ struct blocking_job {
 
   /** datos del trabajo provisto por el usuario */
   void *data;
+  /** optional callback run after this blocking notification is drained */
+  void (*cleanup)(void *);
 
   /** el siguiente en la lista */
   struct blocking_job *next;
@@ -455,13 +457,14 @@ static void handle_block_notifications(fd_selector s) {
   while (j != NULL) {
 
     struct item *item = s->fds + j->fd;
-    if (ITEM_USED(item)) {
+    if (ITEM_USED(item) && item->data == j->data) {
       key.fd = item->fd;
       key.data = item->data;
       if (item->handler->handle_block_done != NULL) {
         item->handler->handle_block_done(&key);
       }
     }
+    if (j->cleanup != NULL) { j->cleanup(j->data); }
 
     struct blocking_job *aux = j;
     j = j->next;
@@ -472,7 +475,9 @@ static void handle_block_notifications(fd_selector s) {
 }
 
 
-selector_status selector_notify_block_done(fd_selector s, const int fd) {
+selector_status selector_notify_block_done(
+  fd_selector s, const int fd, void *data, void (*cleanup)(void *)
+) {
   selector_status ret = SELECTOR_SUCCESS;
 
   // TODO(juan): usar un pool
@@ -483,6 +488,8 @@ selector_status selector_notify_block_done(fd_selector s, const int fd) {
   }
   job->s = s;
   job->fd = fd;
+  job->data = data;
+  job->cleanup = cleanup;
 
   // encolamos en el selector los resultados
   pthread_mutex_lock(&s->resolution_mutex);
