@@ -188,22 +188,25 @@ What’s still missing or weak in the SOCKS5 part:
 1. FQDN multi-address fallback is incomplete  
    `socks5.c` tries resolved addresses only until one `connect()` starts. If that async connect later fails in `origin_connect_write`, it replies failure instead of trying the next resolved address. The TP explicitly asks for trying other IPs when an FQDN resolves to multiple addresses.
 
-2. SOCKS reply does not report real bind address/port  
-   `request_marshall_reply` always sends `0.0.0.0:0`. Many clients tolerate this, but RFC1928 expects `BND.ADDR`/`BND.PORT` from the proxy-side socket. For “report failures using all protocol power,” this is a visible weakness.
-
-3. Nonblocking negotiation I/O treats `EAGAIN` as fatal  
-   In `socks5nio.c`, `read()`/`write()` returning `-1` closes immediately. For nonblocking sockets, `EAGAIN`/`EWOULDBLOCK` should just keep the interest. Relay code already handles this correctly.
-
-4. Auth method selection only accepts username/password  
-   `socks5.c` ignores no-auth. That may be fine if the project requires auth for all proxy users, but if tests expect `NO AUTHENTICATION REQUIRED` support, it will fail.
-
-5. Request error mapping is too coarse  
-   Bad request version or bad reserved byte currently becomes `ADDRESS_TYPE_NOT_SUPPORTED` through `request_read`. Unsupported ATYP should be `0x08`, unsupported command should be `0x07`, but malformed version/RSV should probably be general failure.
-
-6. Half-close relay behavior is probably too aggressive  
+2. Half-close relay behavior is probably too aggressive  
    `relay_should_close` closes the whole tunnel when either side EOFs and its pending buffer drains. A more transparent proxy should `shutdown()` one direction and keep the other direction alive until both sides are done.
 
-7. Cleanup/pool shutdown is unfinished  
+   PREENTREGA : ask whether this TP expects TCP half-close correctness in the SOCKS relay, or whether closing the tunnel after one side finishes sending is acceptable for the demos/tests.
+
+     Current behavior:
+
+     client <-> proxy <-> origin
+   
+     If either side reaches EOF, the proxy eventually closes the whole connection once
+     pending buffered data is flushed.
+   
+     Example:
+   
+     client sends request
+     client closes its write side
+     origin still wants to send a response 
+
+3. Cleanup/pool shutdown is unfinished  
    `socksv5_pool_destroy` is still TODO, and graceful shutdown in `main.c` stops the loop rather than stopping accepts and waiting for active connections.
 
 Build status: `make` passes.
