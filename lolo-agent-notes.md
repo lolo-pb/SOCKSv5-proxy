@@ -39,32 +39,6 @@ Build output, like `bin/server` and `bin/client`.
 `obj/`
 Compiled object files.
 
-## Build And Run
-
-`Makefile`
-Builds all `src/server/*.c`, `src/client/*.c`, and `src/shared/*.c`.
-
-Main commands:
-
-```sh
-make
-make server
-make client
-make clean
-```
-
-`Makefile.inc`
-Compiler settings. Currently uses `gcc`, C11, warnings, pedantic mode, and debug symbols.
-
-Server defaults come from `src/shared/args.c`:
-
-```text
-SOCKS listen addr: 0.0.0.0
-SOCKS listen port: 1080
-management addr:   127.0.0.1
-management port:   8080
-max users:         10
-```
 
 Useful server args:
 
@@ -74,32 +48,90 @@ Useful server args:
 ./bin/server -N
 ```
 
-## Code Preferences
+## Server Files
 
-Do not silence unused parameters with casts like `(void) key;`. If a parameter
-is unused because it belongs to a future stub or callback signature, prefer
-leaving it plainly unused.
+`src/server/main.c`
+Server bootstrap. It owns process-level setup: CLI args, listen address/port, passive socket, signals, selector creation, selector loop, and shutdown cleanup.
 
-## Main Runtime Flow
+It does not implement SOCKS5 protocol behavior. Its key handoff is:
 
-1. `src/server/main.c` parses CLI args into `struct socks5args`.
-2. `main.c` passes those args into `socksv5_init()`.
-3. `main.c` creates, binds, and listens on the passive TCP socket.
-4. `main.c` initializes the selector and registers the passive socket for `OP_READ`.
-5. The passive socket handler is `socksv5_passive_accept()`.
-6. `socks5nio.c` accepts each client, sets it nonblocking, allocates `struct socks5`, and registers the client fd.
-7. For each client event, `socks5nio.c` does socket I/O and stores bytes in shared `buffer` objects.
-8. `socks5.c` consumes those buffers through the protocol state machine.
-9. `socks5.c` returns a `socks5_action`: wait for read, wait for write, or close.
-10. `socks5nio.c` applies that action to the selector/client fd.
-
-Important object relationship:
-
-```text
-selector client fd data -> struct socks5
+```c
+.handle_read = socksv5_passive_accept
 ```
 
-So client callbacks receive `key->data` as that client's SOCKS5 state.
+`src/server/socks5nio.c`
+NIO/socket glue for SOCKS5 clients.
+
+Responsibilities:
+
+- Accept clients from the passive server fd.
+- Set client sockets to nonblocking mode.
+- Allocate/free one `struct socks5` per client.
+- Register client fds in the selector.
+- Read socket bytes into `state->read_buffer`.
+- Write bytes from `state->write_buffer`.
+- Ask `socks5.c` what selector interest should come next.
+- Close client fds on EOF, error, or protocol completion.
+
+`src/server/socks5.c`
+Main SOCKS5 protocol state machine.
+
+Responsibilities:
+
+- Initialize `struct socks5`.
+- Store global server args for credential checks.
+- Drive states: hello read/write, auth read/write, request read/write, connecting, relay, done, error.
+- Choose the authentication method.
+- Check username/password credentials from CLI users.
+- Start origin connections and handle origin fd callbacks.
+- Relay data in both directions after CONNECT succeeds.
+- Handle relay half-close with directional `shutdown(..., SHUT_WR)`.
+- Return read/write/close actions to `socks5nio.c`.
+
+Current protocol support:
+
+- SOCKS5 hello parsing.
+- Username/password method selection (`0x02`).
+- Username/password auth parsing and response.
+- CONNECT request parsing.
+- IPv4, IPv6, and domain-name origin connection attempts.
+- Async DNS resolution for domain requests.
+- FQDN multi-address fallback using a `dns_next` cursor.
+- Nonblocking origin connect.
+- Bidirectional relay after successful CONNECT.
+- Relay half-close handling after one side reaches EOF.
+
+`src/server/hello.c`
+Parser/marshaller for the SOCKS5 hello/auth-method negotiation message.
+
+`src/server/auth.c`
+Parser/marshaller for username/password subnegotiation.
+
+`src/server/include/socks5.h`
+Defines `struct socks5`, protocol states/actions, constants, and the protocol API used by `socks5nio.c`.
+
+`src/server/include/socks5nio.h`
+Public NIO API used by `main.c`: `socksv5_init()`, `socksv5_passive_accept()`, and `socksv5_pool_destroy()`.
+
+## Shared Files
+
+`src/shared/args.c`
+CLI parser. Fills `struct socks5args` with listen addresses, ports, dissector setting, and up to 10 users.
+
+`src/shared/selector.c`
+Custom selector/event loop. Registers fds, tracks read/write interest, dispatches callbacks, and supports notifications from blocking jobs.
+
+`src/shared/buffer.c`
+Read/write buffer helper. Server connections now use this instead of raw read/write counters.
+
+`src/shared/stm.c`
+Small state-machine engine used by the SOCKS5 protocol.
+
+`src/shared/parser.c`
+Generic byte parser engine.
+
+`src/shared/netutils.c`
+Shared network helpers.
 
 ## Full Proxy Flow
 
@@ -301,94 +333,15 @@ client connects
 -> write_buffer is written to client
 ```
 
-## Server Files
-
-`src/server/main.c`
-Server bootstrap. It owns process-level setup: CLI args, listen address/port, passive socket, signals, selector creation, selector loop, and shutdown cleanup.
-
-It does not implement SOCKS5 protocol behavior. Its key handoff is:
-
-```c
-.handle_read = socksv5_passive_accept
-```
-
-`src/server/socks5nio.c`
-NIO/socket glue for SOCKS5 clients.
-
-Responsibilities:
-
-- Accept clients from the passive server fd.
-- Set client sockets to nonblocking mode.
-- Allocate/free one `struct socks5` per client.
-- Register client fds in the selector.
-- Read socket bytes into `state->read_buffer`.
-- Write bytes from `state->write_buffer`.
-- Ask `socks5.c` what selector interest should come next.
-- Close client fds on EOF, error, or protocol completion.
-
-`src/server/socks5.c`
-Main SOCKS5 protocol state machine.
-
-Responsibilities:
-
-- Initialize `struct socks5`.
-- Store global server args for credential checks.
-- Drive states: hello read/write, auth read/write, request read/write, connecting, relay, done, error.
-- Choose the authentication method.
-- Check username/password credentials from CLI users.
-- Start origin connections and handle origin fd callbacks.
-- Relay data in both directions after CONNECT succeeds.
-- Handle relay half-close with directional `shutdown(..., SHUT_WR)`.
-- Return read/write/close actions to `socks5nio.c`.
-
-Current protocol support:
-
-- SOCKS5 hello parsing.
-- Username/password method selection (`0x02`).
-- Username/password auth parsing and response.
-- CONNECT request parsing.
-- IPv4, IPv6, and domain-name origin connection attempts.
-- Async DNS resolution for domain requests.
-- FQDN multi-address fallback using a `dns_next` cursor.
-- Nonblocking origin connect.
-- Bidirectional relay after successful CONNECT.
-- Relay half-close handling after one side reaches EOF.
-
-`src/server/hello.c`
-Parser/marshaller for the SOCKS5 hello/auth-method negotiation message.
-
-`src/server/auth.c`
-Parser/marshaller for username/password subnegotiation.
-
-`src/server/include/socks5.h`
-Defines `struct socks5`, protocol states/actions, constants, and the protocol API used by `socks5nio.c`.
-
-`src/server/include/socks5nio.h`
-Public NIO API used by `main.c`: `socksv5_init()`, `socksv5_passive_accept()`, and `socksv5_pool_destroy()`.
-
-## Shared Files
-
-`src/shared/args.c`
-CLI parser. Fills `struct socks5args` with listen addresses, ports, dissector setting, and up to 10 users.
-
-`src/shared/selector.c`
-Custom selector/event loop. Registers fds, tracks read/write interest, dispatches callbacks, and supports notifications from blocking jobs.
-
-`src/shared/buffer.c`
-Read/write buffer helper. Server connections now use this instead of raw read/write counters.
-
-`src/shared/stm.c`
-Small state-machine engine used by the SOCKS5 protocol.
-
-`src/shared/parser.c`
-Generic byte parser engine.
-
-`src/shared/netutils.c`
-Shared network helpers.
-
 ## Suggestions / Uncertainty
 
 What’s still missing or weak in the SOCKS5 part:
 
 1. Cleanup/pool shutdown is unfinished  
    `socksv5_pool_destroy` is still TODO, and graceful shutdown in `main.c` stops the loop rather than stopping accepts and waiting for active connections.
+
+## Code Preferences
+
+Do not silence unused parameters with casts like `(void) key;`. If a parameter
+is unused because it belongs to a future stub or callback signature, prefer
+leaving it plainly unused.
