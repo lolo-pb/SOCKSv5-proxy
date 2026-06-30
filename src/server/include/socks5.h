@@ -52,7 +52,9 @@ struct socks5 {
   struct state_machine stm;
   int client_fd;
   int origin_fd;
-  bool origin_registered;
+  bool closing;          // true while connection_close is already running
+  bool client_registered;// client fd is still registered in the selector
+  bool origin_registered;// origin fd is still registered in the selector
   bool relay_started;
   bool client_eof;
   bool origin_eof;
@@ -79,7 +81,7 @@ void socks5_init(struct socks5 *socks);
 void socks5_ref(struct socks5 *socks);
 void socks5_release(struct socks5 *socks);
 void socks5_set_client_fd(struct socks5 *socks, int client_fd);
-void socks5_unregister_origin(struct socks5 *socks, fd_selector selector);
+void socks5_connection_close(struct socks5 *socks, fd_selector selector);
 bool socks5_is_relaying(struct socks5 *socks);
 socks5_action
 socks5_relay_client_read(struct socks5 *socks, struct selector_key *key);

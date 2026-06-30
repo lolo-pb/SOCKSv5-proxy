@@ -59,6 +59,7 @@ void socksv5_passive_accept(struct selector_key *key) {
     close(client);
     return;
   }
+  state->client_registered = true;
 
   fprintf(stderr, "new connection fd=%d\n", client);
 }
@@ -75,18 +76,16 @@ static void socksv5_read(struct selector_key *key) {
   const ssize_t bytes = read(key->fd, ptr, count);
 
   if (bytes == 0) {// EOF
-    selector_unregister_fd(key->s, key->fd);
     fprintf(stderr, "closing fd=%d ...\n", key->fd);
-    close(key->fd);
+    socks5_connection_close(state, key->s);
     return;
   } else if (bytes < 0) {
     if (socksv5_retryable_io_error()) {
       selector_set_interest_key(key, OP_READ);
       return;
     }
-    selector_unregister_fd(key->s, key->fd);
     fprintf(stderr, "closing fd=%d ...\n", key->fd);
-    close(key->fd);
+    socks5_connection_close(state, key->s);
     return;
   }
 
@@ -98,8 +97,8 @@ static void socksv5_read(struct selector_key *key) {
 
 static void socksv5_close(struct selector_key *key) {
   struct socks5 *state = key->data;
-  socks5_unregister_origin(state, key->s);
-  socks5_release(state);
+  if (state->client_fd == key->fd) { state->client_registered = false; }
+  socks5_connection_close(state, key->s);
 }
 
 static void socksv5_block_done(struct selector_key *key) {
@@ -121,18 +120,16 @@ static void socksv5_write(struct selector_key *key) {
   const ssize_t bytes = write(key->fd, ptr, count);
 
   if (bytes == 0) {
-    selector_unregister_fd(key->s, key->fd);
     fprintf(stderr, "closing fd=%d ...\n", key->fd);
-    close(key->fd);
+    socks5_connection_close(state, key->s);
     return;
   } else if (bytes < 0) {
     if (socksv5_retryable_io_error()) {
       selector_set_interest_key(key, OP_WRITE);
       return;
     }
-    selector_unregister_fd(key->s, key->fd);
     fprintf(stderr, "closing fd=%d ...\n", key->fd);
-    close(key->fd);
+    socks5_connection_close(state, key->s);
     return;
   }
 
@@ -165,9 +162,8 @@ socksv5_apply_action(struct selector_key *key, const socks5_action action) {
       selector_set_interest_key(key, OP_WRITE);
       break;
     case SOCKS5_ACTION_CLOSE:
-      selector_unregister_fd(key->s, key->fd);
       fprintf(stderr, "closing fd=%d ...\n", key->fd);
-      close(key->fd);
+      socks5_connection_close(key->data, key->s);
       break;
   }
 }

@@ -30,6 +30,11 @@ static void origin_connect_write(struct selector_key *key);
 static void origin_read(struct selector_key *key);
 static void origin_write(struct selector_key *key);
 static void origin_connect_close(struct selector_key *key);
+static void client_unregister(struct socks5 *socks, fd_selector selector);
+static void client_close(struct socks5 *socks, fd_selector selector);
+static void origin_unregister(struct socks5 *socks, fd_selector selector);
+static void origin_close(struct socks5 *socks, fd_selector selector);
+static void socks5_free(struct socks5 *socks);
 
 // struct to pass dns thread data to main thred
 struct dns_job {
@@ -115,20 +120,6 @@ void socks5_init(struct socks5 *socks) {
   );
 }
 
-// Frees the SOCKS state once every owner has released its reference.
-static void socks5_free(struct socks5 *socks) {
-  if (socks->origin_fd >= 0) {
-    close(socks->origin_fd);
-    socks->origin_fd = -1;
-  }
-  if (socks->dns_result != NULL) {
-    freeaddrinfo(socks->dns_result);
-    socks->dns_result = NULL;
-  }
-  pthread_mutex_destroy(&socks->dns_mutex);
-  free(socks);
-}
-
 void socks5_ref(struct socks5 *socks) {
   if (socks == NULL) { return; }
   atomic_fetch_add_explicit(&socks->references, 1, memory_order_relaxed);
@@ -154,38 +145,12 @@ void socks5_set_client_fd(struct socks5 *socks, const int client_fd) {
   socks->client_fd = client_fd;
 }
 
-// Unregisters a pending origin fd before the shared SOCKS state is freed.
-void socks5_unregister_origin(struct socks5 *socks, fd_selector selector) {
-  if (socks->origin_registered && socks->origin_fd >= 0) {
-    selector_unregister_fd(selector, socks->origin_fd);
-    socks->origin_registered = false;
-  }
-}
-
 bool socks5_is_relaying(struct socks5 *socks) { return socks->relay_started; }
 
 // Decides if one side is done and its pending relay data has been drained.
 static bool relay_should_close(struct socks5 *socks) {
   return (socks->client_eof && !buffer_can_read(&socks->read_buffer)) ||
          (socks->origin_eof && !buffer_can_read(&socks->write_buffer));
-}
-
-// Closes both relay fds and unregisters them from the selector.
-static void relay_close(struct socks5 *socks, fd_selector selector) {
-  const int client_fd = socks->client_fd;
-
-  if (socks->origin_registered && socks->origin_fd >= 0) {
-    selector_unregister_fd(selector, socks->origin_fd);
-    socks->origin_registered = false;
-  }
-  if (socks->origin_fd >= 0) {
-    close(socks->origin_fd);
-    socks->origin_fd = -1;
-  }
-  if (client_fd >= 0) {
-    selector_unregister_fd(selector, client_fd);
-    close(client_fd);
-  }
 }
 
 // Recomputes read/write interests from relay buffer state.
@@ -667,10 +632,7 @@ static void origin_connect_write(struct selector_key *key) {
 
   socks->request_reply = socks5_reply_from_errno(error);
   if (error != 0) {
-    socks->origin_registered = false;
-    selector_unregister_fd(key->s, key->fd);
-    close(key->fd);
-    socks->origin_fd = -1;
+    origin_close(socks, key->s);
 
     if (socks->request.atyp == SOCKS5_ATYP_DOMAINNAME &&
         socks->dns_next != NULL) {
@@ -704,12 +666,12 @@ static void origin_read(struct selector_key *key) {
   } else if (bytes == 0) {
     socks->origin_eof = true;
   } else if (!is_retryable_io_error()) {
-    relay_close(socks, key->s);
+    socks5_connection_close(socks, key->s);
     return;
   }
 
   if (relay_should_close(socks)) {
-    relay_close(socks, key->s);
+    socks5_connection_close(socks, key->s);
     return;
   }
   relay_update_interests(socks, key->s);
@@ -731,12 +693,12 @@ static void origin_write(struct selector_key *key) {
   if (bytes > 0) {
     buffer_read_adv(&socks->read_buffer, bytes);
   } else if (bytes < 0 && !is_retryable_io_error()) {
-    relay_close(socks, key->s);
+    socks5_connection_close(socks, key->s);
     return;
   }
 
   if (relay_should_close(socks)) {
-    relay_close(socks, key->s);
+    socks5_connection_close(socks, key->s);
     return;
   }
   relay_update_interests(socks, key->s);
@@ -746,4 +708,57 @@ static void origin_write(struct selector_key *key) {
 static void origin_connect_close(struct selector_key *key) {
   struct socks5 *socks = key->data;
   if (socks->origin_fd == key->fd) { socks->origin_registered = false; }
+}
+
+// Frees the SOCKS state once every owner has released its reference.
+static void socks5_free(struct socks5 *socks) {
+  if (socks->dns_result != NULL) {
+    freeaddrinfo(socks->dns_result);
+    socks->dns_result = NULL;
+  }
+  pthread_mutex_destroy(&socks->dns_mutex);
+  free(socks);
+}
+
+static void client_unregister(struct socks5 *socks, fd_selector selector) {
+  if (socks->client_registered && socks->client_fd >= 0) {
+    const int fd = socks->client_fd;
+    socks->client_registered = false;
+    selector_unregister_fd(selector, fd);
+  }
+}
+
+static void client_close(struct socks5 *socks, fd_selector selector) {
+  const int fd = socks->client_fd;
+  client_unregister(socks, selector);
+  if (fd >= 0) {
+    close(fd);
+    if (socks->client_fd == fd) { socks->client_fd = -1; }
+  }
+}
+
+static void origin_unregister(struct socks5 *socks, fd_selector selector) {
+  if (socks->origin_registered && socks->origin_fd >= 0) {
+    const int fd = socks->origin_fd;
+    socks->origin_registered = false;
+    selector_unregister_fd(selector, fd);
+  }
+}
+
+static void origin_close(struct socks5 *socks, fd_selector selector) {
+  const int fd = socks->origin_fd;
+  origin_unregister(socks, selector);
+  if (fd >= 0) {
+    close(fd);
+    if (socks->origin_fd == fd) { socks->origin_fd = -1; }
+  }
+}
+
+void socks5_connection_close(struct socks5 *socks, fd_selector selector) {
+  if (socks == NULL || socks->closing) { return; }
+
+  socks->closing = true;
+  client_close(socks, selector);
+  origin_close(socks, selector);
+  socks5_release(socks);
 }
