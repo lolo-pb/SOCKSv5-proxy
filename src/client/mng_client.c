@@ -1,5 +1,3 @@
-#define _POSIX_C_SOURCE 200809L /* gmtime_r */
-
 #include "mng_client.h"
 
 #include <errno.h>
