@@ -19,6 +19,15 @@
  *   +-----+--------+-----+---------+
  *     1B     1B      2B   variable
  *                   (BE)
+ *
+ * Response PAYLOAD per command (only meaningful when STATUS == MON_STATUS_OK):
+ *   AUTH / ADD_USER / DEL_USER : empty (result carried by STATUS)
+ *   GET_METRICS    : 3 x uint64 BE -> historic_conns, current_conns, bytes
+ *                    (MON_METRICS_PAYLOAD_LEN bytes)
+ *   LIST_USERS     : uint8 count, then count x { uint8 namelen, name bytes }
+ *   GET_ACCESS_LOG : uint16 BE count, then count x
+ *                    { uint64 BE timestamp, uint16 BE port,
+ *                      uint8 userlen, user bytes, uint8 addrlen, addr bytes }
  */
 
 #define MON_VERSION 0x01
@@ -42,6 +51,9 @@
 #define MON_MAX_ARG_LEN 255
 #define MON_MAX_ARGS 2
 #define MON_RESPONSE_HEADER_LEN 4 /* VER + STATUS + LEN(2) */
+
+/* GET_METRICS payload: 3 x uint64 BE */
+#define MON_METRICS_PAYLOAD_LEN 24
 
 /* parsed request */
 struct mon_request {
@@ -75,6 +87,24 @@ int mon_request_encode(
  */
 int mon_response_encode(
   const struct mon_response *resp, uint8_t *buf, size_t buf_len
+);
+
+/** result of trying to decode a response from a byte stream */
+typedef enum {
+  MON_DECODE_OK,        /* a full response was parsed                  */
+  MON_DECODE_NEED_MORE, /* not enough bytes yet, read more and retry   */
+  MON_DECODE_ERROR,     /* protocol violation (e.g. bad version)       */
+} mon_decode_status;
+
+/**
+ * Decode a response from buf[0..len). On MON_DECODE_OK, fills *out (its
+ * `payload` field points into buf, valid while buf lives) and writes the
+ * number of bytes consumed into *consumed. Returns MON_DECODE_NEED_MORE if
+ * fewer than MON_RESPONSE_HEADER_LEN + payload_len bytes are available.
+ * Used by the client.
+ */
+mon_decode_status mon_response_decode(
+  const uint8_t *buf, size_t len, struct mon_response *out, size_t *consumed
 );
 
 #endif
