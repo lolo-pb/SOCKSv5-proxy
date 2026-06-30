@@ -30,7 +30,7 @@ obj/%.o: src/%.c
 	mkdir -p $(OBJECTS_FOLDER)/server
 	mkdir -p $(OBJECTS_FOLDER)/client
 	mkdir -p $(OBJECTS_FOLDER)/shared
-	$(COMPILER) $(COMPILER_FLAGS) -I src/shared/include -I src/server/include -c $< -o $@
+	$(COMPILER) $(COMPILER_FLAGS) -I src/shared/include -I src/server/include -I src/client/include -c $< -o $@
 
 clean:
 	rm -rf $(OUTPUT_FOLDER)
