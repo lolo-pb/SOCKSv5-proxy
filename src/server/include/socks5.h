@@ -48,10 +48,38 @@ typedef enum {
 } socks5_action;
 
 struct socks5 {
+  // lifecycle
   atomic_uint references;
   struct state_machine stm;
+
+  // sockets
   int client_fd;
   int origin_fd;
+
+  // dns
+  int dns_error;
+  struct addrinfo *dns_result;
+  struct addrinfo *dns_next;
+  pthread_mutex_t dns_mutex;// this is for dns response buffer writing it isn't
+                            // really needed but its beter practice so fuck it
+
+  // buffers
+  uint8_t raw_read_buffer[4096];
+  uint8_t raw_write_buffer[4096];
+  buffer read_buffer; // used as client-to-origin buffer during relay
+  buffer write_buffer;// used as origin-to-client buffer during relay
+
+  // parsers
+  struct hello_parser hello;
+  struct auth_parser auth;
+  struct request_parser request;
+
+  // protocol results
+  uint8_t selected_method;
+  uint8_t auth_status;
+  uint8_t request_reply;
+
+  // flags
   bool closing;          // true while connection_close is already running
   bool client_registered;// client fd is still registered in the selector
   bool origin_registered;// origin fd is still registered in the selector
@@ -61,21 +89,6 @@ struct socks5 {
   bool client_write_shutdown;// proxy will not write more bytes to client
   bool origin_write_shutdown;// proxy will not write more bytes to origin
   bool dns_pending;
-  int dns_error;
-  struct addrinfo *dns_result;
-  struct addrinfo *dns_next;
-  pthread_mutex_t dns_mutex;// this is for dns response buffer writing it isn't
-                            // really needed but its beter practice so fuck it
-  uint8_t raw_read_buffer[4096];
-  uint8_t raw_write_buffer[4096];
-  buffer read_buffer; // used as client-to-origin buffer during relay
-  buffer write_buffer;// used as origin-to-client buffer during relay
-  struct hello_parser hello;
-  struct auth_parser auth;
-  struct request_parser request;
-  uint8_t selected_method;
-  uint8_t auth_status;
-  uint8_t request_reply;
 };
 
 void socks5_set_args(struct socks5args *args);
