@@ -99,6 +99,195 @@ selector client fd data -> struct socks5
 
 So client callbacks receive `key->data` as that client's SOCKS5 state.
 
+## Full Proxy Flow
+
+```text
+client connects to proxy
+-> main server socket becomes readable
+-> socksv5_passive_accept() accepts client fd
+-> client fd is set nonblocking
+-> struct socks5 is allocated for this client
+-> client fd is registered in selector with OP_READ
+```
+
+```text
+client sends SOCKS5 hello
+-> selector calls socksv5_read()
+-> bytes go into socks->read_buffer
+-> socks5_handle_read() runs HELLO_READ state
+-> hello parser reads version + auth methods
+-> server chooses username/password auth
+-> hello reply is written into socks->write_buffer
+-> client fd interest becomes OP_WRITE
+```
+
+```text
+proxy sends hello reply
+-> selector calls socksv5_write()
+-> bytes are written from socks->write_buffer to client fd
+-> hello reply buffer becomes empty
+-> socks5_handle_write() moves state to AUTH_READ
+-> client fd interest becomes OP_READ
+```
+
+```text
+client sends username/password auth
+-> selector calls socksv5_read()
+-> bytes go into socks->read_buffer
+-> socks5_handle_read() runs AUTH_READ state
+-> auth parser reads username + password
+-> credentials are checked against configured users
+-> auth response is written into socks->write_buffer
+-> client fd interest becomes OP_WRITE
+```
+
+```text
+proxy sends auth response
+-> selector calls socksv5_write()
+-> bytes are written from socks->write_buffer to client fd
+-> auth response buffer becomes empty
+-> if auth succeeded, state moves to REQUEST_READ
+-> client fd interest becomes OP_READ
+```
+
+```text
+client sends CONNECT request
+-> selector calls socksv5_read()
+-> bytes go into socks->read_buffer
+-> socks5_handle_read() runs REQUEST_READ state
+-> request parser reads command, address type, destination address, destination port
+-> if command is CONNECT, proxy starts origin connection
+```
+
+For IPv4 / IPv6:
+
+```text
+request has raw IP address
+-> build sockaddr from request address + port
+-> create nonblocking origin socket
+-> call connect()
+```
+
+For FQDN/domain:
+
+```text
+request has domain name
+-> start_domain_connect() creates DNS job
+-> DNS thread runs getaddrinfo()
+-> client fd interest becomes OP_NOOP while DNS is pending
+-> DNS finishes
+-> selector wakes client fd with block_done
+-> start_resolved_connect() loops resolved addresses
+-> create nonblocking origin socket
+-> call connect()
+-> if async connect fails, dns_next is used to try the next resolved address
+```
+
+If origin connect starts asynchronously:
+
+```text
+connect() returns EINPROGRESS
+-> origin fd is registered in selector with OP_WRITE
+-> client fd interest becomes OP_NOOP
+-> state becomes CONNECTING
+```
+
+When origin connect finishes:
+
+```text
+origin fd becomes writable
+-> selector calls origin_write()
+-> relay has not started yet
+-> origin_write() calls origin_connect_write()
+-> getsockopt(SO_ERROR) checks connect result
+```
+
+If origin connect succeeds:
+
+```text
+origin connect succeeds
+-> set origin fd OP_NOOP
+-> marshal SOCKS success reply into client write buffer
+-> state becomes REQUEST_WRITE
+-> client fd interest becomes OP_WRITE
+```
+
+```text
+proxy sends SOCKS success reply
+-> selector calls socksv5_write()
+-> bytes are written from socks->write_buffer to client fd
+-> SOCKS reply buffer becomes empty
+-> request_write() sees success
+-> start_relay() runs
+-> read/write buffers are reset
+-> relay_started = true
+-> enable origin/client read/write interests
+```
+
+Now one forward trip, client to origin:
+
+```text
+client sends application data
+-> client fd becomes readable
+-> selector calls socksv5_read()
+-> socks5_is_relaying() is true
+-> socks5_relay_client_read() reads from client fd
+-> bytes go into socks->read_buffer
+-> relay_update_interests() enables OP_WRITE on origin fd
+```
+
+```text
+proxy forwards data to origin
+-> origin fd becomes writable
+-> selector calls origin_write()
+-> relay_started is true
+-> bytes are written from socks->read_buffer to origin fd
+-> sent bytes are removed from socks->read_buffer
+-> relay_update_interests() updates client/origin interests
+```
+
+Now one backward trip, origin to client:
+
+```text
+origin sends application data
+-> origin fd becomes readable
+-> selector calls origin_read()
+-> bytes are read from origin fd
+-> bytes go into socks->write_buffer
+-> relay_update_interests() enables OP_WRITE on client fd
+```
+
+```text
+proxy forwards data back to client
+-> client fd becomes writable
+-> selector calls socksv5_write()
+-> socks5_is_relaying() is true
+-> socks5_relay_client_write() writes from socks->write_buffer to client fd
+-> sent bytes are removed from socks->write_buffer
+-> relay_update_interests() updates client/origin interests
+```
+
+So the shortest full version is:
+
+```text
+client connects
+-> proxy accepts and registers client fd
+-> client sends hello
+-> proxy replies selected auth method
+-> client sends username/password
+-> proxy replies auth success
+-> client sends CONNECT request
+-> proxy resolves/builds destination address
+-> proxy starts nonblocking connect to origin
+-> origin connect succeeds
+-> proxy sends SOCKS success reply
+-> proxy starts relay
+-> client data is read into read_buffer
+-> read_buffer is written to origin
+-> origin response is read into write_buffer
+-> write_buffer is written to client
+```
+
 ## Server Files
 
 `src/server/main.c`
@@ -144,6 +333,7 @@ Current protocol support:
 - CONNECT request parsing.
 - IPv4, IPv6, and domain-name origin connection attempts.
 - Async DNS resolution for domain requests.
+- FQDN multi-address fallback using a `dns_next` cursor.
 - Nonblocking origin connect.
 - Bidirectional relay after successful CONNECT.
 
@@ -181,14 +371,11 @@ Shared network helpers.
 
 ## Suggestions / Uncertainty
 
-The note is outdated. The SOCKS5 core is no longer missing CONNECT entirely: it has hello, username/password auth, request parsing, IPv4/IPv6/domain connect, async DNS, nonblocking connect, and relay.
+The SOCKS5 core has hello, username/password auth, request parsing, IPv4/IPv6/domain connect, async DNS, FQDN multi-address fallback, nonblocking connect, and relay.
 
 What’s still missing or weak in the SOCKS5 part:
 
-1. FQDN multi-address fallback is incomplete  
-   `socks5.c` tries resolved addresses only until one `connect()` starts. If that async connect later fails in `origin_connect_write`, it replies failure instead of trying the next resolved address. The TP explicitly asks for trying other IPs when an FQDN resolves to multiple addresses.
-
-2. Half-close relay behavior is probably too aggressive  
+1. Half-close relay behavior is probably too aggressive  
    `relay_should_close` closes the whole tunnel when either side EOFs and its pending buffer drains. A more transparent proxy should `shutdown()` one direction and keep the other direction alive until both sides are done.
 
    PREENTREGA : ask whether this TP expects TCP half-close correctness in the SOCKS relay, or whether closing the tunnel after one side finishes sending is acceptable for the demos/tests.
@@ -206,7 +393,7 @@ What’s still missing or weak in the SOCKS5 part:
      client closes its write side
      origin still wants to send a response 
 
-3. Cleanup/pool shutdown is unfinished  
+2. Cleanup/pool shutdown is unfinished  
    `socksv5_pool_destroy` is still TODO, and graceful shutdown in `main.c` stops the loop rather than stopping accepts and waiting for active connections.
 
 Build status: `make` passes.

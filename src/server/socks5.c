@@ -505,6 +505,7 @@ static void *dns_worker(void *data) {
   pthread_mutex_lock(&job->socks->dns_mutex);
   job->socks->dns_error = error;
   job->socks->dns_result = result;
+  job->socks->dns_next = result;
   pthread_mutex_unlock(&job->socks->dns_mutex);
 
   selector_status ss = selector_notify_block_done(
@@ -515,7 +516,7 @@ static void *dns_worker(void *data) {
   return NULL;
 }
 
-// Tries the resolved addresses until a nonblocking origin connect starts.
+// Tries resolved addresses from the current DNS cursor until a connect starts.
 static int
 start_resolved_connect(struct socks5 *socks, struct selector_key *key) {
   if (socks->dns_error != 0 || socks->dns_result == NULL) {
@@ -523,7 +524,8 @@ start_resolved_connect(struct socks5 *socks, struct selector_key *key) {
   }
 
   int last_error = EHOSTUNREACH;
-  for (struct addrinfo *ai = socks->dns_result; ai != NULL; ai = ai->ai_next) {
+  for (struct addrinfo *ai = socks->dns_next; ai != NULL; ai = ai->ai_next) {
+    socks->dns_next = ai->ai_next;
     if (ai->ai_socktype != SOCK_STREAM) { continue; }
 
     const int status =
@@ -558,6 +560,7 @@ start_domain_connect(struct socks5 *socks, struct selector_key *key) {
   socks->dns_pending = true;
   socks->dns_error = 0;
   socks->dns_result = NULL;
+  socks->dns_next = NULL;
   pthread_mutex_unlock(&socks->dns_mutex);
 
   socks5_ref(socks);
@@ -668,6 +671,13 @@ static void origin_connect_write(struct selector_key *key) {
     selector_unregister_fd(key->s, key->fd);
     close(key->fd);
     socks->origin_fd = -1;
+
+    if (socks->request.atyp == SOCKS5_ATYP_DOMAINNAME &&
+        socks->dns_next != NULL) {
+      error = start_resolved_connect(socks, key);
+      if (error == EINPROGRESS) { return; }
+      socks->request_reply = socks5_reply_from_errno(error);
+    }
   } else {
     selector_set_interest(key->s, key->fd, OP_NOOP);
   }

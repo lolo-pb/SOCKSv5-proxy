@@ -59,6 +59,7 @@ struct socks5 {
   bool dns_pending;
   int dns_error;
   struct addrinfo *dns_result;
+  struct addrinfo *dns_next;
   pthread_mutex_t dns_mutex;// this is for dns response buffer writing it isnt
                             // really needed but its beter practice so fuck it
   uint8_t raw_read_buffer[4096];
