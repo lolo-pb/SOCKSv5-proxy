@@ -56,13 +56,15 @@ struct socks5 {
   bool client_registered;// client fd is still registered in the selector
   bool origin_registered;// origin fd is still registered in the selector
   bool relay_started;
-  bool client_eof;
-  bool origin_eof;
+  bool client_eof;           // client will not send us more bytes
+  bool origin_eof;           // origin will not send us more bytes
+  bool client_write_shutdown;// proxy will not write more bytes to client
+  bool origin_write_shutdown;// proxy will not write more bytes to origin
   bool dns_pending;
   int dns_error;
   struct addrinfo *dns_result;
   struct addrinfo *dns_next;
-  pthread_mutex_t dns_mutex;// this is for dns response buffer writing it isnt
+  pthread_mutex_t dns_mutex;// this is for dns response buffer writing it isn't
                             // really needed but its beter practice so fuck it
   uint8_t raw_read_buffer[4096];
   uint8_t raw_write_buffer[4096];

@@ -147,10 +147,31 @@ void socks5_set_client_fd(struct socks5 *socks, const int client_fd) {
 
 bool socks5_is_relaying(struct socks5 *socks) { return socks->relay_started; }
 
-// Decides if one side is done and its pending relay data has been drained.
+static void relay_shutdown_write_side(int fd, bool *shutdown_done) {
+  if (*shutdown_done || fd < 0) { return; }
+
+  shutdown(fd, SHUT_WR);
+  *shutdown_done = true;
+}
+
+// Propagates EOF in one direction without closing the whole tunnel.
 static bool relay_should_close(struct socks5 *socks) {
-  return (socks->client_eof && !buffer_can_read(&socks->read_buffer)) ||
-         (socks->origin_eof && !buffer_can_read(&socks->write_buffer));
+  const bool client_to_origin_drained = !buffer_can_read(&socks->read_buffer);
+  const bool origin_to_client_drained = !buffer_can_read(&socks->write_buffer);
+
+  if (socks->client_eof && client_to_origin_drained) {
+    relay_shutdown_write_side(
+      socks->origin_fd, &socks->origin_write_shutdown
+    );
+  }
+  if (socks->origin_eof && origin_to_client_drained) {
+    relay_shutdown_write_side(
+      socks->client_fd, &socks->client_write_shutdown
+    );
+  }
+
+  return socks->client_eof && socks->origin_eof && client_to_origin_drained &&
+         origin_to_client_drained;
 }
 
 // Recomputes read/write interests from relay buffer state.
@@ -177,6 +198,8 @@ static unsigned start_relay(struct socks5 *socks, fd_selector selector) {
   socks->relay_started = true;
   socks->client_eof = false;
   socks->origin_eof = false;
+  socks->client_write_shutdown = false;
+  socks->origin_write_shutdown = false;
   buffer_reset(&socks->read_buffer);
   buffer_reset(&socks->write_buffer);
   relay_update_interests(socks, selector);// good use of API ദ്ദി（• ˕ •)マ

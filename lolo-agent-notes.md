@@ -267,6 +267,17 @@ proxy forwards data back to client
 -> relay_update_interests() updates client/origin interests
 ```
 
+Relay EOF / half-close behavior:
+
+```text
+one side reaches EOF
+-> proxy stops reading from that side
+-> pending data for the opposite side is flushed
+-> proxy calls shutdown(other_fd, SHUT_WR)
+-> tunnel stays open for the other direction
+-> full close happens after both sides EOF and both relay buffers drain
+```
+
 So the shortest full version is:
 
 ```text
@@ -371,31 +382,8 @@ Shared network helpers.
 
 ## Suggestions / Uncertainty
 
-The SOCKS5 core has hello, username/password auth, request parsing, IPv4/IPv6/domain connect, async DNS, FQDN multi-address fallback, nonblocking connect, and relay.
-
 What’s still missing or weak in the SOCKS5 part:
 
-1. Half-close relay behavior is probably too aggressive  
-   `relay_should_close` closes the whole tunnel when either side EOFs and its pending buffer drains. A more transparent proxy should `shutdown()` one direction and keep the other direction alive until both sides are done.
-
-   PREENTREGA : ask whether this TP expects TCP half-close correctness in the SOCKS relay, or whether closing the tunnel after one side finishes sending is acceptable for the demos/tests.
-
-     Current behavior:
-
-     client <-> proxy <-> origin
-   
-     If either side reaches EOF, the proxy eventually closes the whole connection once
-     pending buffered data is flushed.
-   
-     Example:
-   
-     client sends request
-     client closes its write side
-     origin still wants to send a response 
-
-2. Cleanup/pool shutdown is unfinished  
+1. Cleanup/pool shutdown is unfinished  
    `socksv5_pool_destroy` is still TODO, and graceful shutdown in `main.c` stops the loop rather than stopping accepts and waiting for active connections.
 
-Build status: `make` passes.
-
-The name `socksv5` appears in the NIO code, while the protocol is usually written `socks5`. This is harmless but can be confusing when reading the split between socket glue and protocol code.
