@@ -8,7 +8,7 @@ This is a C SOCKS v5 proxy project.
 
 The server is event-driven. `main.c` owns the listening socket and the selector loop. Accepted client sockets are handled through selector callbacks in `socks5nio.c`, while protocol decisions live in the SOCKS5 protocol files.
 
-Blocking work, like future DNS resolution with `getaddrinfo`, is expected to happen outside the main selector loop and notify the selector when ready.
+Blocking work, like DNS resolution with `getaddrinfo`, happens outside the main selector loop and notifies the selector when ready.
 
 ## Folders
 
@@ -70,6 +70,8 @@ Useful server args:
 
 ```sh
 ./bin/server -p 1080 -l 0.0.0.0 -u user:pass
+./bin/server -U users.conf
+./bin/server -N
 ```
 
 ## Code Preferences
@@ -331,9 +333,12 @@ Responsibilities:
 
 - Initialize `struct socks5`.
 - Store global server args for credential checks.
-- Drive states: hello read/write, auth read/write, request read, done, error.
+- Drive states: hello read/write, auth read/write, request read/write, connecting, relay, done, error.
 - Choose the authentication method.
 - Check username/password credentials from CLI users.
+- Start origin connections and handle origin fd callbacks.
+- Relay data in both directions after CONNECT succeeds.
+- Handle relay half-close with directional `shutdown(..., SHUT_WR)`.
 - Return read/write/close actions to `socks5nio.c`.
 
 Current protocol support:
@@ -347,6 +352,7 @@ Current protocol support:
 - FQDN multi-address fallback using a `dns_next` cursor.
 - Nonblocking origin connect.
 - Bidirectional relay after successful CONNECT.
+- Relay half-close handling after one side reaches EOF.
 
 `src/server/hello.c`
 Parser/marshaller for the SOCKS5 hello/auth-method negotiation message.
@@ -386,4 +392,3 @@ What’s still missing or weak in the SOCKS5 part:
 
 1. Cleanup/pool shutdown is unfinished  
    `socksv5_pool_destroy` is still TODO, and graceful shutdown in `main.c` stops the loop rather than stopping accepts and waiting for active connections.
-
