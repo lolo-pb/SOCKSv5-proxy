@@ -16,7 +16,12 @@ static void socksv5_block_done(struct selector_key *key);
 static void socksv5_close(struct selector_key *key);
 static void
 socksv5_apply_action(struct selector_key *key, socks5_action action);
+static void socksv5_pool_add(struct socks5 *state);
+static void socksv5_pool_remove(struct socks5 *state);
 static bool socksv5_retryable_io_error(void);
+
+static struct socks5 *socksv5_pool = NULL;
+static size_t socksv5_pool_size = 0;
 
 static const struct fd_handler socksv5_handler = {
   .handle_read = socksv5_read,
@@ -60,6 +65,7 @@ void socksv5_passive_accept(struct selector_key *key) {
     return;
   }
   state->client_registered = true;
+  socksv5_pool_add(state);
 
   fprintf(stderr, "new connection fd=%d\n", client);
 }
@@ -98,6 +104,7 @@ static void socksv5_read(struct selector_key *key) {
 static void socksv5_close(struct selector_key *key) {
   struct socks5 *state = key->data;
   if (state->client_fd == key->fd) { state->client_registered = false; }
+  socksv5_pool_remove(state);
   socks5_connection_close(state, key->s);
 }
 
@@ -168,8 +175,46 @@ socksv5_apply_action(struct selector_key *key, const socks5_action action) {
   }
 }
 
+// methods to add a socks thing to the list
+static void socksv5_pool_add(struct socks5 *state) {
+  state->pool_next = socksv5_pool;
+  socksv5_pool = state;
+  socksv5_pool_size++;
+}
+
+// methods to remove a socks thing to the list
+static void socksv5_pool_remove(struct socks5 *state) {
+  struct socks5 **current = &socksv5_pool;
+
+  while (*current != NULL) {
+    if (*current == state) {
+      *current = state->pool_next;
+      state->pool_next = NULL;
+      socksv5_pool_size--;
+      return;
+    }
+    current = &(*current)->pool_next;
+  }
+}
+
+size_t socksv5_active_connections(void) { return socksv5_pool_size; }
+
+void socksv5_pool_force_shutdown(fd_selector selector) {
+  while (socksv5_pool != NULL) {
+    struct socks5 *state = socksv5_pool;
+    socks5_cancel(state);
+    socks5_connection_close(state, selector);
+    if (socksv5_pool == state) { socksv5_pool_remove(state); }
+  }
+}
+
 void socksv5_pool_destroy(void) {
-  // TODO: liberar pool de conexiones
+  if (socksv5_pool_size != 0) {
+    fprintf(
+      stderr, "warning: %zu SOCKS connections still tracked\n",
+      socksv5_pool_size
+    );
+  }
 }
 
 static bool socksv5_retryable_io_error(void) {

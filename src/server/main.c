@@ -30,11 +30,20 @@
 
 #define SERVER_BACKLOG SOMAXCONN
 
-static bool done = false;
+static volatile sig_atomic_t shutdown_signals = 0;
 
 static void sigterm_handler(const int signal) {
-  printf("signal %d, cleaning up and exiting\n", signal);
-  done = true;
+  if ((signal == SIGTERM || signal == SIGINT) && shutdown_signals < 2) {
+    shutdown_signals++;
+  }
+}
+
+static void stop_accepting(fd_selector selector, int *server) {
+  if (*server < 0) { return; }
+
+  if (selector != NULL) { selector_unregister_fd(selector, *server); }
+  close(*server);
+  *server = -1;
 }
 
 int main(const int argc, char **argv) {
@@ -57,12 +66,13 @@ int main(const int argc, char **argv) {
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
   }
 
-  const int server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  int server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (server < 0) {
     err_msg = "unable to create socket";
     goto finally;
   }
 
+  fprintf(stdout, "\033[2J\033[H");
   fprintf(stdout, "  ______             _                _______  \n");
   fprintf(stdout, " / _____)           | |              ( ______) \n");
   fprintf(stdout, "( (____   ___   ____| |  _  ___ _   _| |____   \n");
@@ -87,8 +97,15 @@ int main(const int argc, char **argv) {
 
   // registrar sigterm es útil para terminar el programa normalmente.
   // esto ayuda mucho en herramientas como valgrind.
-  signal(SIGTERM, sigterm_handler);
-  signal(SIGINT, sigterm_handler);
+  struct sigaction shutdown_action = {
+    .sa_handler = sigterm_handler,
+  };
+  sigemptyset(&shutdown_action.sa_mask);
+  if (sigaction(SIGTERM, &shutdown_action, NULL) == -1 ||
+      sigaction(SIGINT, &shutdown_action, NULL) == -1) {
+    err_msg = "registering signal handlers";
+    goto finally;
+  }
   signal(SIGPIPE, SIG_IGN);
 
   if (selector_fd_set_nio(server) == -1) {
@@ -124,7 +141,23 @@ int main(const int argc, char **argv) {
     err_msg = "registering fd";
     goto finally;
   }
-  for (; !done;) {
+  bool draining = false;
+  for (;;) {
+    if (shutdown_signals > 0 && !draining) {
+      fprintf(
+        stderr, " : shutdown requested, waiting for active connections\n"
+      );
+      stop_accepting(selector, &server);
+      draining = true;
+    }
+    if (shutdown_signals > 1) {
+      fprintf(stderr, " : force shutdown requested\n");
+      stop_accepting(selector, &server);
+      socksv5_pool_force_shutdown(selector);
+      break;
+    }
+    if (draining && socksv5_active_connections() == 0) { break; }
+
     err_msg = NULL;
     ss = selector_select(selector);
     if (ss != SELECTOR_SUCCESS) {
@@ -132,7 +165,6 @@ int main(const int argc, char **argv) {
       goto finally;
     }
   }
-  if (err_msg == NULL) { err_msg = "closing"; }
 
   int ret = 0;
 finally:
@@ -146,6 +178,7 @@ finally:
     perror(err_msg);
     ret = 1;
   }
+  if (selector != NULL) { socksv5_pool_force_shutdown(selector); }
   if (selector != NULL) { selector_destroy(selector); }
   selector_close();
 

@@ -145,6 +145,14 @@ void socks5_set_client_fd(struct socks5 *socks, const int client_fd) {
   socks->client_fd = client_fd;
 }
 
+void socks5_cancel(struct socks5 *socks) {
+  if (socks == NULL) { return; }
+
+  pthread_mutex_lock(&socks->dns_mutex);
+  socks->cancelled = true;
+  pthread_mutex_unlock(&socks->dns_mutex);
+}
+
 bool socks5_is_relaying(struct socks5 *socks) { return socks->relay_started; }
 
 static void relay_shutdown_write_side(int fd, bool *shutdown_done) {
@@ -481,6 +489,7 @@ static int start_ipv6_connect(struct socks5 *socks, struct selector_key *key) {
 
 static void *dns_worker(void *data) {
   struct dns_job *job = data;
+  struct socks5 *socks = job->socks;
   struct addrinfo hints;
   struct addrinfo *result = NULL;
 
@@ -490,16 +499,25 @@ static void *dns_worker(void *data) {
 
   const int error = getaddrinfo(job->host, job->service, &hints, &result);
 
-  pthread_mutex_lock(&job->socks->dns_mutex);
-  job->socks->dns_error = error;
-  job->socks->dns_result = result;
-  job->socks->dns_next = result;
-  pthread_mutex_unlock(&job->socks->dns_mutex);
+  pthread_mutex_lock(&socks->dns_mutex);
+  socks->dns_pending = false;
+  if (!socks->cancelled) {
+    socks->dns_error = error;
+    socks->dns_result = result;
+    socks->dns_next = result;
+    result = NULL;
 
-  selector_status ss = selector_notify_block_done(
-    job->selector, job->client_fd, job->socks, socks5_release_block_data
-  );
-  if (ss != SELECTOR_SUCCESS) { socks5_release(job->socks); }
+    selector_status ss = selector_notify_block_done(
+      job->selector, job->client_fd, socks, socks5_release_block_data
+    );
+    pthread_mutex_unlock(&socks->dns_mutex);
+    if (ss != SELECTOR_SUCCESS) { socks5_release(socks); }
+  } else {
+    pthread_mutex_unlock(&socks->dns_mutex);
+    socks5_release(socks);
+  }
+
+  if (result != NULL) { freeaddrinfo(result); }
   free(job);
   return NULL;
 }
@@ -781,6 +799,7 @@ void socks5_connection_close(struct socks5 *socks, fd_selector selector) {
   if (socks == NULL || socks->closing) { return; }
 
   socks->closing = true;
+  socks5_cancel(socks);
   client_close(socks, selector);
   origin_close(socks, selector);
   socks5_release(socks);

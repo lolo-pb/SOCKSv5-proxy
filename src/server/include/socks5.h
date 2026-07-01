@@ -51,6 +51,8 @@ struct socks5 {
   // lifecycle
   atomic_uint references;
   struct state_machine stm;
+  struct socks5 *pool_next;// this makes this a linked list fir cleanup
+
 
   // sockets
   int client_fd;
@@ -89,6 +91,7 @@ struct socks5 {
   bool client_write_shutdown;// proxy will not write more bytes to client
   bool origin_write_shutdown;// proxy will not write more bytes to origin
   bool dns_pending;
+  bool cancelled;
 };
 
 void socks5_set_args(struct socks5args *args);
@@ -96,6 +99,7 @@ void socks5_init(struct socks5 *socks);
 void socks5_ref(struct socks5 *socks);
 void socks5_release(struct socks5 *socks);
 void socks5_set_client_fd(struct socks5 *socks, int client_fd);
+void socks5_cancel(struct socks5 *socks);
 void socks5_connection_close(struct socks5 *socks, fd_selector selector);
 bool socks5_is_relaying(struct socks5 *socks);
 socks5_action

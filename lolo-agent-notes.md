@@ -337,8 +337,10 @@ client connects
 
 What’s still missing or weak in the SOCKS5 part:
 
-1. Cleanup/pool shutdown is unfinished  
-   `socksv5_pool_destroy` is still TODO, and graceful shutdown in `main.c` stops the loop rather than stopping accepts and waiting for active connections.
+1. Graceful shutdown has no timeout  
+   First `SIGINT` / `SIGTERM` stops accepting and waits for active clients.
+   A second signal force-closes active connections. If a timeout is wanted,
+   it would belong around the draining loop in `main.c`.
 
 ## Code Preferences
 
