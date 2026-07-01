@@ -236,7 +236,7 @@ socks5_relay_client_read(struct socks5 *socks, struct selector_key *key) {
 
   if (relay_should_close(socks)) { return SOCKS5_ACTION_CLOSE; }
   relay_update_interests(socks, key->s);
-  return SOCKS5_ACTION_NOOP;
+  return SOCKS5_ACTION_NONE;
 }
 
 // Writes origin bytes from the origin-to-client relay buffer.
@@ -254,7 +254,7 @@ socks5_relay_client_write(struct socks5 *socks, struct selector_key *key) {
 
   if (relay_should_close(socks)) { return SOCKS5_ACTION_CLOSE; }
   relay_update_interests(socks, key->s);
-  return SOCKS5_ACTION_NOOP;
+  return SOCKS5_ACTION_NONE;
 }
 
 socks5_action
