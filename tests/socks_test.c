@@ -235,6 +235,223 @@ START_TEST(test_relay_client_read_keeps_selector_interests_alive) {
 }
 END_TEST
 
+START_TEST(test_domain_resolved_connect_falls_back_to_next_address) {
+  init_selector_for_test();
+
+  int client_pair[2];
+  ck_assert_int_eq(0, socketpair(AF_UNIX, SOCK_STREAM, 0, client_pair));
+
+  fd_selector selector = selector_new(32);
+  ck_assert_ptr_nonnull(selector);
+
+  struct socks5 socks;
+  socks5_init(&socks);
+  socks.client_fd = client_pair[1];
+  socks.request.atyp = SOCKS5_ATYP_DOMAINNAME;
+
+  struct sockaddr bad_addr;
+  struct sockaddr next_bad_addr;
+  memset(&bad_addr, 0, sizeof(bad_addr));
+  memset(&next_bad_addr, 0, sizeof(next_bad_addr));
+  bad_addr.sa_family = AF_UNSPEC;
+  next_bad_addr.sa_family = AF_UNSPEC;
+
+  struct addrinfo bad;
+  struct addrinfo next_bad;
+  memset(&bad, 0, sizeof(bad));
+  memset(&next_bad, 0, sizeof(next_bad));
+
+  bad.ai_socktype = SOCK_STREAM;
+  bad.ai_addr = &bad_addr;
+  bad.ai_addrlen = sizeof(bad_addr);
+  bad.ai_next = &next_bad;
+
+  next_bad.ai_socktype = SOCK_STREAM;
+  next_bad.ai_addr = &next_bad_addr;
+  next_bad.ai_addrlen = sizeof(next_bad_addr);
+
+  socks.dns_error = 0;
+  socks.dns_result = &bad;
+  socks.dns_next = &bad;
+
+  ck_assert_int_eq(
+    SELECTOR_SUCCESS,
+    selector_register(
+      selector, socks.client_fd, &dummy_handler, OP_NOOP, &socks
+    )
+  );
+
+  struct selector_key key = {
+    .s = selector,
+    .fd = socks.client_fd,
+    .data = &socks,
+  };
+  const int status = start_resolved_connect(&socks, &key);
+
+  ck_assert_int_ne(0, status);
+  ck_assert_int_eq(-1, socks.origin_fd);
+  ck_assert(!socks.origin_registered);
+  ck_assert_ptr_null(socks.dns_next);
+
+  selector_unregister_fd(selector, socks.client_fd);
+  selector_destroy(selector);
+  close(client_pair[0]);
+  close(client_pair[1]);
+  socks.dns_result = NULL;
+  pthread_mutex_destroy(&socks.dns_mutex);
+}
+END_TEST
+
+START_TEST(test_relay_origin_read_then_client_write) {
+  init_selector_for_test();
+
+  int client_pair[2];
+  int origin_pair[2];
+  ck_assert_int_eq(0, socketpair(AF_UNIX, SOCK_STREAM, 0, client_pair));
+  ck_assert_int_eq(0, socketpair(AF_UNIX, SOCK_STREAM, 0, origin_pair));
+
+  fd_selector selector = selector_new(32);
+  ck_assert_ptr_nonnull(selector);
+
+  struct socks5 socks;
+  socks5_init(&socks);
+  socks.client_fd = client_pair[1];
+  socks.origin_fd = origin_pair[1];
+  socks.relay_started = true;
+
+  ck_assert_int_eq(
+    SELECTOR_SUCCESS,
+    selector_register(
+      selector, socks.client_fd, &dummy_handler, OP_NOOP, &socks
+    )
+  );
+  ck_assert_int_eq(
+    SELECTOR_SUCCESS,
+    selector_register(
+      selector, socks.origin_fd, &dummy_handler, OP_READ, &socks
+    )
+  );
+
+  const uint8_t payload[] = {'r', 'e', 's', 'p', 'o', 'n', 's', 'e'};
+  ck_assert_int_eq(
+    (ssize_t) sizeof(payload), write(origin_pair[0], payload, sizeof(payload))
+  );
+
+  struct selector_key origin_key = {
+    .s = selector,
+    .fd = socks.origin_fd,
+    .data = &socks,
+  };
+  origin_read(&origin_key);
+
+  assert_buffer_eq(&socks.write_buffer, payload, sizeof(payload));
+  ck_assert(selector->fds[socks.client_fd].interest & OP_WRITE);
+  ck_assert(selector->fds[socks.origin_fd].interest & OP_READ);
+
+  struct selector_key client_key = {
+    .s = selector,
+    .fd = socks.client_fd,
+    .data = &socks,
+  };
+  ck_assert_int_eq(
+    SOCKS5_ACTION_NONE, socks5_relay_client_write(&socks, &client_key)
+  );
+  ck_assert(!buffer_can_read(&socks.write_buffer));
+
+  uint8_t got[sizeof(payload)];
+  ck_assert_int_eq(
+    (ssize_t) sizeof(got), read(client_pair[0], got, sizeof(got))
+  );
+  ck_assert_mem_eq(got, payload, sizeof(payload));
+
+  selector_destroy(selector);
+  close(client_pair[0]);
+  close(client_pair[1]);
+  close(origin_pair[0]);
+  close(origin_pair[1]);
+  pthread_mutex_destroy(&socks.dns_mutex);
+}
+END_TEST
+
+START_TEST(test_relay_half_close_waits_until_pending_client_bytes_are_flushed) {
+  init_selector_for_test();
+
+  int client_pair[2];
+  int origin_pair[2];
+  ck_assert_int_eq(0, socketpair(AF_UNIX, SOCK_STREAM, 0, client_pair));
+  ck_assert_int_eq(0, socketpair(AF_UNIX, SOCK_STREAM, 0, origin_pair));
+
+  fd_selector selector = selector_new(32);
+  ck_assert_ptr_nonnull(selector);
+
+  struct socks5 socks;
+  socks5_init(&socks);
+  socks.client_fd = client_pair[1];
+  socks.origin_fd = origin_pair[1];
+  socks.relay_started = true;
+
+  ck_assert_int_eq(
+    SELECTOR_SUCCESS,
+    selector_register(
+      selector, socks.client_fd, &dummy_handler, OP_READ, &socks
+    )
+  );
+  ck_assert_int_eq(
+    SELECTOR_SUCCESS,
+    selector_register(
+      selector, socks.origin_fd, &dummy_handler, OP_NOOP, &socks
+    )
+  );
+
+  const uint8_t payload[] = {'p', 'e', 'n', 'd', 'i', 'n', 'g'};
+  ck_assert_int_eq(
+    (ssize_t) sizeof(payload), write(client_pair[0], payload, sizeof(payload))
+  );
+
+  struct selector_key client_key = {
+    .s = selector,
+    .fd = socks.client_fd,
+    .data = &socks,
+  };
+  ck_assert_int_eq(
+    SOCKS5_ACTION_NONE, socks5_relay_client_read(&socks, &client_key)
+  );
+
+  ck_assert_int_eq(0, close(client_pair[0]));
+  client_pair[0] = -1;
+  ck_assert_int_eq(
+    SOCKS5_ACTION_NONE, socks5_relay_client_read(&socks, &client_key)
+  );
+
+  ck_assert(socks.client_eof);
+  ck_assert(!socks.origin_write_shutdown);
+  ck_assert(buffer_can_read(&socks.read_buffer));
+
+  struct selector_key origin_key = {
+    .s = selector,
+    .fd = socks.origin_fd,
+    .data = &socks,
+  };
+  origin_write(&origin_key);
+
+  ck_assert(!buffer_can_read(&socks.read_buffer));
+  ck_assert(socks.origin_write_shutdown);
+
+  uint8_t got[sizeof(payload)];
+  ck_assert_int_eq(
+    (ssize_t) sizeof(got), read(origin_pair[0], got, sizeof(got))
+  );
+  ck_assert_mem_eq(got, payload, sizeof(payload));
+
+  selector_destroy(selector);
+  if (client_pair[0] >= 0) { close(client_pair[0]); }
+  close(client_pair[1]);
+  close(origin_pair[0]);
+  close(origin_pair[1]);
+  pthread_mutex_destroy(&socks.dns_mutex);
+}
+END_TEST
+
 START_TEST(test_connection_close_unregisters_and_closes_fds) {
   init_selector_for_test();
 
@@ -354,6 +571,11 @@ Suite *suite(void) {
   tcase_add_test(tc, test_auth_success_and_failure_drive_state);
   tcase_add_test(tc, test_unsupported_command_writes_socks_reply_then_closes);
   tcase_add_test(tc, test_relay_client_read_keeps_selector_interests_alive);
+  tcase_add_test(tc, test_domain_resolved_connect_falls_back_to_next_address);
+  tcase_add_test(tc, test_relay_origin_read_then_client_write);
+  tcase_add_test(
+    tc, test_relay_half_close_waits_until_pending_client_bytes_are_flushed
+  );
   tcase_add_test(tc, test_connection_close_unregisters_and_closes_fds);
   tcase_add_test(tc, test_domain_dns_worker_stores_resolution_result);
   suite_add_tcase(s, tc);
