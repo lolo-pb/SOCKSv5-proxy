@@ -111,8 +111,10 @@ static int run_against_addr(
   }
 
   mng_client_init(client, args);
-  if (selector_register(s, fd, mng_client_handler(), OP_WRITE, client) !=
-      SELECTOR_SUCCESS) {
+  if (
+    selector_register(s, fd, mng_client_handler(), OP_WRITE, client) !=
+    SELECTOR_SUCCESS
+  ) {
     close(fd);
     return -1;
   }

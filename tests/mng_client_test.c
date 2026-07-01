@@ -12,8 +12,8 @@
  *       tests/mng_client_test.c src/shared/buffer.c src/shared/selector.c \
  *       src/shared/stm.c -o /tmp/mng_client_test && /tmp/mng_client_test
  */
-#include <assert.h>
 #include <arpa/inet.h>
+#include <assert.h>
 #include <netinet/in.h>
 #include <signal.h>
 #include <stdio.h>
@@ -24,8 +24,8 @@
 #include <unistd.h>
 
 /* pull in the units under test (and their static helpers) */
-#include "mon_protocol.c"
 #include "mng_client.c"
+#include "mon_protocol.c"
 
 /* ------------------------------------------------------------------ */
 /* unit tests                                                         */
@@ -55,8 +55,10 @@ static void test_decode_roundtrip(void) {
 static void test_decode_need_more_and_bad_version(void) {
   const uint8_t pl[] = {0xAA, 0xBB, 0xCC};
   const struct mon_response in = {
-    .version = MON_VERSION, .status = MON_STATUS_OK,
-    .payload_len = sizeof(pl), .payload = pl,
+    .version = MON_VERSION,
+    .status = MON_STATUS_OK,
+    .payload_len = sizeof(pl),
+    .payload = pl,
   };
   uint8_t buf[64];
   const int n = mon_response_encode(&in, buf, sizeof(buf));
@@ -75,9 +77,10 @@ static void test_decode_need_more_and_bad_version(void) {
 }
 
 /* render a payload through a formatter into a stack buffer */
-static int
-render(int (*fn)(const uint8_t *, size_t, FILE *), const uint8_t *p, size_t len,
-       char *out, size_t out_len) {
+static int render(
+  int (*fn)(const uint8_t *, size_t, FILE *), const uint8_t *p, size_t len,
+  char *out, size_t out_len
+) {
   FILE *f = fmemopen(out, out_len, "w");
   assert(f != NULL);
   const int rc = fn(p, len, f);
@@ -88,9 +91,9 @@ render(int (*fn)(const uint8_t *, size_t, FILE *), const uint8_t *p, size_t len,
 static void test_format_metrics(void) {
   uint8_t p[MON_METRICS_PAYLOAD_LEN];
   memset(p, 0, sizeof(p));
-  p[7] = 5;             /* historic = 5     */
-  p[15] = 2;            /* current  = 2     */
-  p[22] = 0x03;         /* bytes    = 1000  */
+  p[7] = 5;     /* historic = 5     */
+  p[15] = 2;    /* current  = 2     */
+  p[22] = 0x03; /* bytes    = 1000  */
   p[23] = 0xE8;
   char out[256] = {0};
   assert(render(mng_format_metrics, p, sizeof(p), out, sizeof(out)) == 0);
@@ -118,11 +121,11 @@ static void test_format_users(void) {
 
 static void test_format_access_log(void) {
   const uint8_t e[] = {
-    0, 1,                            /* count = 1               */
-    0, 0, 0, 0, 0, 0, 0, 0,          /* timestamp = epoch       */
-    0x1F, 0x90,                      /* port = 8080             */
-    3, 'b', 'o', 'b',                /* user = bob              */
-    7, '1', '.', '2', '.', '3', '.', '4', /* addr = 1.2.3.4     */
+    0,    1,                                  /* count = 1               */
+    0,    0,    0,   0,   0,   0,   0,   0,   /* timestamp = epoch       */
+    0x1F, 0x90,                               /* port = 8080             */
+    3,    'b',  'o', 'b',                     /* user = bob              */
+    7,    '1',  '.', '2', '.', '3', '.', '4', /* addr = 1.2.3.4     */
   };
   char out[256] = {0};
   assert(render(mng_format_access_log, e, sizeof(e), out, sizeof(out)) == 0);
@@ -131,10 +134,14 @@ static void test_format_access_log(void) {
   assert(strstr(out, "1.2.3.4:8080") != NULL);
 
   /* truncated last byte */
-  assert(render(mng_format_access_log, e, sizeof(e) - 1, out, sizeof(out)) == -1);
+  assert(
+    render(mng_format_access_log, e, sizeof(e) - 1, out, sizeof(out)) == -1
+  );
 
   const uint8_t empty[] = {0, 0};
-  assert(render(mng_format_access_log, empty, sizeof(empty), out, sizeof(out)) == 0);
+  assert(
+    render(mng_format_access_log, empty, sizeof(empty), out, sizeof(out)) == 0
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -175,14 +182,14 @@ static void drain_request(int fd) {
 static void
 send_response(int fd, uint8_t status, const uint8_t *payload, uint16_t plen) {
   uint8_t hdr[MON_RESPONSE_HEADER_LEN] = {
-    MON_VERSION, status, (uint8_t) (plen >> 8), (uint8_t) (plen & 0xFF)};
+    MON_VERSION, status, (uint8_t) (plen >> 8), (uint8_t) (plen & 0xFF)
+  };
   write_n(fd, hdr, sizeof(hdr));
   if (plen > 0) write_n(fd, payload, plen);
 }
 
 /* child: a minimal blocking server speaking the monitoring protocol */
-static void
-mock_server(int listenfd, uint8_t auth_status, uint8_t cmd_status) {
+static void mock_server(int listenfd, uint8_t auth_status, uint8_t cmd_status) {
   const int c = accept(listenfd, NULL, NULL);
   if (c < 0) _exit(1);
   drain_request(c); /* AUTH */
@@ -198,7 +205,8 @@ mock_server(int listenfd, uint8_t auth_status, uint8_t cmd_status) {
 }
 
 /* parent: drive the real non-blocking client against 127.0.0.1:port */
-static int run_client(fd_selector s, unsigned short port, struct client_args *args) {
+static int
+run_client(fd_selector s, unsigned short port, struct client_args *args) {
   struct mng_client *c = malloc(sizeof(*c));
   assert(c != NULL);
   mng_client_init(c, args);
@@ -212,11 +220,15 @@ static int run_client(fd_selector s, unsigned short port, struct client_args *ar
   a.sin_family = AF_INET;
   a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   a.sin_port = htons(port);
-  if (connect(fd, (struct sockaddr *) &a, sizeof(a)) < 0 && errno != EINPROGRESS) {
+  if (
+    connect(fd, (struct sockaddr *) &a, sizeof(a)) < 0 && errno != EINPROGRESS
+  ) {
     _exit(1);
   }
-  assert(selector_register(s, fd, mng_client_handler(), OP_WRITE, c) ==
-         SELECTOR_SUCCESS);
+  assert(
+    selector_register(s, fd, mng_client_handler(), OP_WRITE, c) ==
+    SELECTOR_SUCCESS
+  );
 
   while (!c->finished) assert(selector_select(s) == SELECTOR_SUCCESS);
   const int result = c->result;
@@ -266,18 +278,25 @@ static void run_scenario(
 static void integration_tests(void) {
   signal(SIGPIPE, SIG_IGN);
   const struct selector_init conf = {
-    .signal = SIGALRM, .select_timeout = {.tv_sec = 2, .tv_nsec = 0}};
+    .signal = SIGALRM,
+    .select_timeout = {.tv_sec = 2, .tv_nsec = 0}
+  };
   assert(selector_init(&conf) == 0);
   fd_selector s = selector_new(16);
   assert(s != NULL);
 
   /* auth ok + command ok -> success */
-  run_scenario(s, MON_STATUS_OK, MON_STATUS_OK, CLIENT_CMD_LIST_USERS, MNG_EXIT_OK);
+  run_scenario(
+    s, MON_STATUS_OK, MON_STATUS_OK, CLIENT_CMD_LIST_USERS, MNG_EXIT_OK
+  );
   /* auth rejected -> exit 3 */
-  run_scenario(s, MON_STATUS_AUTH_FAIL, 0, CLIENT_CMD_LIST_USERS, MNG_EXIT_AUTH);
+  run_scenario(
+    s, MON_STATUS_AUTH_FAIL, 0, CLIENT_CMD_LIST_USERS, MNG_EXIT_AUTH
+  );
   /* auth ok but command error -> exit 4 */
   run_scenario(
-    s, MON_STATUS_OK, MON_STATUS_USER_NOT_FOUND, CLIENT_CMD_DEL_USER, MNG_EXIT_CMD
+    s, MON_STATUS_OK, MON_STATUS_USER_NOT_FOUND, CLIENT_CMD_DEL_USER,
+    MNG_EXIT_CMD
   );
 
   selector_destroy(s);

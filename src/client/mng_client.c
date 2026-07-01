@@ -36,13 +36,20 @@ static uint64_t be_u64(const uint8_t *p) {
 
 static const char *status_str(uint8_t status) {
   switch (status) {
-    case MON_STATUS_OK: return "ok";
-    case MON_STATUS_AUTH_FAIL: return "authentication failed";
-    case MON_STATUS_UNKNOWN_CMD: return "unknown command";
-    case MON_STATUS_USER_EXISTS: return "user already exists";
-    case MON_STATUS_USER_NOT_FOUND: return "user not found";
-    case MON_STATUS_INTERNAL_ERROR: return "internal server error";
-    default: return "unknown status";
+    case MON_STATUS_OK:
+      return "ok";
+    case MON_STATUS_AUTH_FAIL:
+      return "authentication failed";
+    case MON_STATUS_UNKNOWN_CMD:
+      return "unknown command";
+    case MON_STATUS_USER_EXISTS:
+      return "user already exists";
+    case MON_STATUS_USER_NOT_FOUND:
+      return "user not found";
+    case MON_STATUS_INTERNAL_ERROR:
+      return "internal server error";
+    default:
+      return "unknown status";
   }
 }
 
@@ -174,8 +181,10 @@ int mng_format_access_log(const uint8_t *payload, size_t len, FILE *out) {
 /* state handlers                                                     */
 /* ------------------------------------------------------------------ */
 
-static unsigned on_auth_ok(struct selector_key *key, const struct mon_response *resp);
-static unsigned on_cmd_ok(struct selector_key *key, const struct mon_response *resp);
+static unsigned
+on_auth_ok(struct selector_key *key, const struct mon_response *resp);
+static unsigned
+on_cmd_ok(struct selector_key *key, const struct mon_response *resp);
 
 /* OP_WRITE: connect() has completed (or failed) */
 static unsigned on_connecting(struct selector_key *key) {
@@ -196,7 +205,8 @@ static unsigned on_connecting(struct selector_key *key) {
 }
 
 /* drain the write buffer; when empty switch to reading the response */
-static unsigned send_buffer(struct selector_key *key, unsigned self, unsigned next) {
+static unsigned
+send_buffer(struct selector_key *key, unsigned self, unsigned next) {
   struct mng_client *d = ATTACHMENT(key);
   size_t n;
   uint8_t *p = buffer_read_ptr(&d->write_buffer, &n);
@@ -224,7 +234,8 @@ static unsigned on_send_cmd(struct selector_key *key) {
 }
 
 /* accumulate bytes until a full response frame can be decoded */
-static unsigned recv_response(struct selector_key *key, unsigned self, bool is_auth) {
+static unsigned
+recv_response(struct selector_key *key, unsigned self, bool is_auth) {
   struct mng_client *d = ATTACHMENT(key);
   size_t space;
   uint8_t *ptr = buffer_write_ptr(&d->read_buffer, &space);
@@ -372,9 +383,7 @@ static const struct fd_handler handler = {
   .handle_block = NULL,
 };
 
-const struct fd_handler *mng_client_handler(void) {
-  return &handler;
-}
+const struct fd_handler *mng_client_handler(void) { return &handler; }
 
 void mng_client_init(struct mng_client *c, const struct client_args *args) {
   c->args = args;

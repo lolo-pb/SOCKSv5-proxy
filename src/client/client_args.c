@@ -96,7 +96,9 @@ void client_parse_args(int argc, char **argv, struct client_args *args) {
         args->mng_port = parse_port(optarg);
         break;
       case 'u':
-        if (!client_split_credentials(optarg, &args->username, &args->password)) {
+        if (!client_split_credentials(
+              optarg, &args->username, &args->password
+            )) {
           fprintf(stderr, "client: -u expects user:pass\n");
           exit(1);
         }
@@ -109,7 +111,9 @@ void client_parse_args(int argc, char **argv, struct client_args *args) {
         break;
       case 'a':
         set_cmd(args, CLIENT_CMD_ADD_USER, argv[0]);
-        if (!client_split_credentials(optarg, &args->arg_user, &args->arg_pass)) {
+        if (!client_split_credentials(
+              optarg, &args->arg_user, &args->arg_pass
+            )) {
           fprintf(stderr, "client: -a expects user:pass\n");
           exit(1);
         }
