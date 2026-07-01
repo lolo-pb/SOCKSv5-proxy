@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,14 +12,21 @@
 
 static void socksv5_read(struct selector_key *key);
 static void socksv5_write(struct selector_key *key);
+static void socksv5_block_done(struct selector_key *key);
 static void socksv5_close(struct selector_key *key);
 static void
 socksv5_apply_action(struct selector_key *key, socks5_action action);
+static void socksv5_pool_add(struct socks5 *state);
+static void socksv5_pool_remove(struct socks5 *state);
+static bool socksv5_retryable_io_error(void);
+
+static struct socks5 *socksv5_pool = NULL;
+static size_t socksv5_pool_size = 0;
 
 static const struct fd_handler socksv5_handler = {
   .handle_read = socksv5_read,
   .handle_write = socksv5_write,
-  .handle_block = NULL,
+  .handle_block_done = socksv5_block_done,
   .handle_close = socksv5_close,
 };
 
@@ -43,6 +51,7 @@ void socksv5_passive_accept(struct selector_key *key) {
     return;
   }
   socks5_init(state);
+  socks5_set_client_fd(state, client);
 
   selector_status ss =
     selector_register(key->s, client, &socksv5_handler, OP_READ, state);
@@ -51,24 +60,38 @@ void socksv5_passive_accept(struct selector_key *key) {
       stderr, "unable to register client fd=%d: %s\n", client,
       selector_error(ss)
     );
-    free(state);
+    socks5_release(state);
     close(client);
     return;
   }
+  state->client_registered = true;
+  socksv5_pool_add(state);
 
   fprintf(stderr, "new connection fd=%d\n", client);
 }
 
 static void socksv5_read(struct selector_key *key) {
   struct socks5 *state = key->data;
+  if (socks5_is_relaying(state)) {
+    socksv5_apply_action(key, socks5_relay_client_read(state, key));
+    return;
+  }
+
   size_t count;
   uint8_t *ptr = buffer_write_ptr(&state->read_buffer, &count);
   const ssize_t bytes = read(key->fd, ptr, count);
 
-  if (bytes <= 0) {// error or EOF
-    selector_unregister_fd(key->s, key->fd);
+  if (bytes == 0) {// EOF
     fprintf(stderr, "closing fd=%d ...\n", key->fd);
-    close(key->fd);
+    socks5_connection_close(state, key->s);
+    return;
+  } else if (bytes < 0) {
+    if (socksv5_retryable_io_error()) {
+      selector_set_interest_key(key, OP_READ);
+      return;
+    }
+    fprintf(stderr, "closing fd=%d ...\n", key->fd);
+    socks5_connection_close(state, key->s);
     return;
   }
 
@@ -78,18 +101,42 @@ static void socksv5_read(struct selector_key *key) {
   socksv5_apply_action(key, action);
 }
 
-static void socksv5_close(struct selector_key *key) { free(key->data); }
+static void socksv5_close(struct selector_key *key) {
+  struct socks5 *state = key->data;
+  if (state->client_fd == key->fd) { state->client_registered = false; }
+  socksv5_pool_remove(state);
+  socks5_connection_close(state, key->s);
+}
+
+static void socksv5_block_done(struct selector_key *key) {
+  struct socks5 *state = key->data;
+  const socks5_action action = socks5_handle_block_done(state, key);
+
+  socksv5_apply_action(key, action);
+}
 
 static void socksv5_write(struct selector_key *key) {
   struct socks5 *state = key->data;
+  if (socks5_is_relaying(state)) {
+    socksv5_apply_action(key, socks5_relay_client_write(state, key));
+    return;
+  }
+
   size_t count;
   uint8_t *ptr = buffer_read_ptr(&state->write_buffer, &count);
   const ssize_t bytes = write(key->fd, ptr, count);
 
-  if (bytes <= 0) {
-    selector_unregister_fd(key->s, key->fd);
+  if (bytes == 0) {
     fprintf(stderr, "closing fd=%d ...\n", key->fd);
-    close(key->fd);
+    socks5_connection_close(state, key->s);
+    return;
+  } else if (bytes < 0) {
+    if (socksv5_retryable_io_error()) {
+      selector_set_interest_key(key, OP_WRITE);
+      return;
+    }
+    fprintf(stderr, "closing fd=%d ...\n", key->fd);
+    socks5_connection_close(state, key->s);
     return;
   }
 
@@ -110,6 +157,11 @@ static void socksv5_write(struct selector_key *key) {
 static void
 socksv5_apply_action(struct selector_key *key, const socks5_action action) {
   switch (action) {
+    case SOCKS5_ACTION_NONE:
+      break;
+    case SOCKS5_ACTION_NOOP:
+      selector_set_interest_key(key, OP_NOOP);
+      break;
     case SOCKS5_ACTION_READ:
       selector_set_interest_key(key, OP_READ);
       break;
@@ -117,13 +169,54 @@ socksv5_apply_action(struct selector_key *key, const socks5_action action) {
       selector_set_interest_key(key, OP_WRITE);
       break;
     case SOCKS5_ACTION_CLOSE:
-      selector_unregister_fd(key->s, key->fd);
       fprintf(stderr, "closing fd=%d ...\n", key->fd);
-      close(key->fd);
+      socks5_connection_close(key->data, key->s);
       break;
   }
 }
 
+// methods to add a socks thing to the list
+static void socksv5_pool_add(struct socks5 *state) {
+  state->pool_next = socksv5_pool;
+  socksv5_pool = state;
+  socksv5_pool_size++;
+}
+
+// methods to remove a socks thing to the list
+static void socksv5_pool_remove(struct socks5 *state) {
+  struct socks5 **current = &socksv5_pool;
+
+  while (*current != NULL) {
+    if (*current == state) {
+      *current = state->pool_next;
+      state->pool_next = NULL;
+      socksv5_pool_size--;
+      return;
+    }
+    current = &(*current)->pool_next;
+  }
+}
+
+size_t socksv5_active_connections(void) { return socksv5_pool_size; }
+
+void socksv5_pool_force_shutdown(fd_selector selector) {
+  while (socksv5_pool != NULL) {
+    struct socks5 *state = socksv5_pool;
+    socks5_cancel(state);
+    socks5_connection_close(state, selector);
+    if (socksv5_pool == state) { socksv5_pool_remove(state); }
+  }
+}
+
 void socksv5_pool_destroy(void) {
-  // TODO: liberar pool de conexiones
+  if (socksv5_pool_size != 0) {
+    fprintf(
+      stderr, "warning: %zu SOCKS connections still tracked\n",
+      socksv5_pool_size
+    );
+  }
+}
+
+static bool socksv5_retryable_io_error(void) {
+  return errno == EAGAIN || errno == EWOULDBLOCK;
 }

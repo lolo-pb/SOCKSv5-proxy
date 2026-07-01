@@ -8,7 +8,7 @@ This is a C SOCKS v5 proxy project.
 
 The server is event-driven. `main.c` owns the listening socket and the selector loop. Accepted client sockets are handled through selector callbacks in `socks5nio.c`, while protocol decisions live in the SOCKS5 protocol files.
 
-Blocking work, like future DNS resolution with `getaddrinfo`, is expected to happen outside the main selector loop and notify the selector when ready.
+Blocking work, like DNS resolution with `getaddrinfo`, happens outside the main selector loop and notifies the selector when ready.
 
 ## Folders
 
@@ -39,59 +39,14 @@ Build output, like `bin/server` and `bin/client`.
 `obj/`
 Compiled object files.
 
-## Build And Run
-
-`Makefile`
-Builds all `src/server/*.c`, `src/client/*.c`, and `src/shared/*.c`.
-
-Main commands:
-
-```sh
-make
-make server
-make client
-make clean
-```
-
-`Makefile.inc`
-Compiler settings. Currently uses `gcc`, C11, warnings, pedantic mode, and debug symbols.
-
-Server defaults come from `src/shared/args.c`:
-
-```text
-SOCKS listen addr: 0.0.0.0
-SOCKS listen port: 1080
-management addr:   127.0.0.1
-management port:   8080
-max users:         10
-```
 
 Useful server args:
 
 ```sh
 ./bin/server -p 1080 -l 0.0.0.0 -u user:pass
+./bin/server -U users.conf
+./bin/server -N
 ```
-
-## Main Runtime Flow
-
-1. `src/server/main.c` parses CLI args into `struct socks5args`.
-2. `main.c` passes those args into `socksv5_init()`.
-3. `main.c` creates, binds, and listens on the passive TCP socket.
-4. `main.c` initializes the selector and registers the passive socket for `OP_READ`.
-5. The passive socket handler is `socksv5_passive_accept()`.
-6. `socks5nio.c` accepts each client, sets it nonblocking, allocates `struct socks5`, and registers the client fd.
-7. For each client event, `socks5nio.c` does socket I/O and stores bytes in shared `buffer` objects.
-8. `socks5.c` consumes those buffers through the protocol state machine.
-9. `socks5.c` returns a `socks5_action`: wait for read, wait for write, or close.
-10. `socks5nio.c` applies that action to the selector/client fd.
-
-Important object relationship:
-
-```text
-selector client fd data -> struct socks5
-```
-
-So client callbacks receive `key->data` as that client's SOCKS5 state.
 
 ## Server Files
 
@@ -125,9 +80,12 @@ Responsibilities:
 
 - Initialize `struct socks5`.
 - Store global server args for credential checks.
-- Drive states: hello read/write, auth read/write, request read, done, error.
+- Drive states: hello read/write, auth read/write, request read/write, connecting, relay, done, error.
 - Choose the authentication method.
 - Check username/password credentials from CLI users.
+- Start origin connections and handle origin fd callbacks.
+- Relay data in both directions after CONNECT succeeds.
+- Handle relay half-close with directional `shutdown(..., SHUT_WR)`.
 - Return read/write/close actions to `socks5nio.c`.
 
 Current protocol support:
@@ -135,7 +93,13 @@ Current protocol support:
 - SOCKS5 hello parsing.
 - Username/password method selection (`0x02`).
 - Username/password auth parsing and response.
-- Request state exists, but real CONNECT handling is not implemented yet.
+- CONNECT request parsing.
+- IPv4, IPv6, and domain-name origin connection attempts.
+- Async DNS resolution for domain requests.
+- FQDN multi-address fallback using a `dns_next` cursor.
+- Nonblocking origin connect.
+- Bidirectional relay after successful CONNECT.
+- Relay half-close handling after one side reaches EOF.
 
 `src/server/hello.c`
 Parser/marshaller for the SOCKS5 hello/auth-method negotiation message.
@@ -169,8 +133,217 @@ Generic byte parser engine.
 `src/shared/netutils.c`
 Shared network helpers.
 
+## Full Proxy Flow
+
+```text
+client connects to proxy
+-> main server socket becomes readable
+-> socksv5_passive_accept() accepts client fd
+-> client fd is set nonblocking
+-> struct socks5 is allocated for this client
+-> client fd is registered in selector with OP_READ
+```
+
+```text
+client sends SOCKS5 hello
+-> selector calls socksv5_read()
+-> bytes go into socks->read_buffer
+-> socks5_handle_read() runs HELLO_READ state
+-> hello parser reads version + auth methods
+-> server chooses username/password auth
+-> hello reply is written into socks->write_buffer
+-> client fd interest becomes OP_WRITE
+```
+
+```text
+proxy sends hello reply
+-> selector calls socksv5_write()
+-> bytes are written from socks->write_buffer to client fd
+-> hello reply buffer becomes empty
+-> socks5_handle_write() moves state to AUTH_READ
+-> client fd interest becomes OP_READ
+```
+
+```text
+client sends username/password auth
+-> selector calls socksv5_read()
+-> bytes go into socks->read_buffer
+-> socks5_handle_read() runs AUTH_READ state
+-> auth parser reads username + password
+-> credentials are checked against configured users
+-> auth response is written into socks->write_buffer
+-> client fd interest becomes OP_WRITE
+```
+
+```text
+proxy sends auth response
+-> selector calls socksv5_write()
+-> bytes are written from socks->write_buffer to client fd
+-> auth response buffer becomes empty
+-> if auth succeeded, state moves to REQUEST_READ
+-> client fd interest becomes OP_READ
+```
+
+```text
+client sends CONNECT request
+-> selector calls socksv5_read()
+-> bytes go into socks->read_buffer
+-> socks5_handle_read() runs REQUEST_READ state
+-> request parser reads command, address type, destination address, destination port
+-> if command is CONNECT, proxy starts origin connection
+```
+
+For IPv4 / IPv6:
+
+```text
+request has raw IP address
+-> build sockaddr from request address + port
+-> create nonblocking origin socket
+-> call connect()
+```
+
+For FQDN/domain:
+
+```text
+request has domain name
+-> start_domain_connect() creates DNS job
+-> DNS thread runs getaddrinfo()
+-> client fd interest becomes OP_NOOP while DNS is pending
+-> DNS finishes
+-> selector wakes client fd with block_done
+-> start_resolved_connect() loops resolved addresses
+-> create nonblocking origin socket
+-> call connect()
+-> if async connect fails, dns_next is used to try the next resolved address
+```
+
+If origin connect starts asynchronously:
+
+```text
+connect() returns EINPROGRESS
+-> origin fd is registered in selector with OP_WRITE
+-> client fd interest becomes OP_NOOP
+-> state becomes CONNECTING
+```
+
+When origin connect finishes:
+
+```text
+origin fd becomes writable
+-> selector calls origin_write()
+-> relay has not started yet
+-> origin_write() calls origin_connect_write()
+-> getsockopt(SO_ERROR) checks connect result
+```
+
+If origin connect succeeds:
+
+```text
+origin connect succeeds
+-> set origin fd OP_NOOP
+-> marshal SOCKS success reply into client write buffer
+-> state becomes REQUEST_WRITE
+-> client fd interest becomes OP_WRITE
+```
+
+```text
+proxy sends SOCKS success reply
+-> selector calls socksv5_write()
+-> bytes are written from socks->write_buffer to client fd
+-> SOCKS reply buffer becomes empty
+-> request_write() sees success
+-> start_relay() runs
+-> read/write buffers are reset
+-> relay_started = true
+-> enable origin/client read/write interests
+```
+
+Now one forward trip, client to origin:
+
+```text
+client sends application data
+-> client fd becomes readable
+-> selector calls socksv5_read()
+-> socks5_is_relaying() is true
+-> socks5_relay_client_read() reads from client fd
+-> bytes go into socks->read_buffer
+-> relay_update_interests() enables OP_WRITE on origin fd
+```
+
+```text
+proxy forwards data to origin
+-> origin fd becomes writable
+-> selector calls origin_write()
+-> relay_started is true
+-> bytes are written from socks->read_buffer to origin fd
+-> sent bytes are removed from socks->read_buffer
+-> relay_update_interests() updates client/origin interests
+```
+
+Now one backward trip, origin to client:
+
+```text
+origin sends application data
+-> origin fd becomes readable
+-> selector calls origin_read()
+-> bytes are read from origin fd
+-> bytes go into socks->write_buffer
+-> relay_update_interests() enables OP_WRITE on client fd
+```
+
+```text
+proxy forwards data back to client
+-> client fd becomes writable
+-> selector calls socksv5_write()
+-> socks5_is_relaying() is true
+-> socks5_relay_client_write() writes from socks->write_buffer to client fd
+-> sent bytes are removed from socks->write_buffer
+-> relay_update_interests() updates client/origin interests
+```
+
+Relay EOF / half-close behavior:
+
+```text
+one side reaches EOF
+-> proxy stops reading from that side
+-> pending data for the opposite side is flushed
+-> proxy calls shutdown(other_fd, SHUT_WR)
+-> tunnel stays open for the other direction
+-> full close happens after both sides EOF and both relay buffers drain
+```
+
+So the shortest full version is:
+
+```text
+client connects
+-> proxy accepts and registers client fd
+-> client sends hello
+-> proxy replies selected auth method
+-> client sends username/password
+-> proxy replies auth success
+-> client sends CONNECT request
+-> proxy resolves/builds destination address
+-> proxy starts nonblocking connect to origin
+-> origin connect succeeds
+-> proxy sends SOCKS success reply
+-> proxy starts relay
+-> client data is read into read_buffer
+-> read_buffer is written to origin
+-> origin response is read into write_buffer
+-> write_buffer is written to client
+```
+
 ## Suggestions / Uncertainty
 
-CONNECT request parsing and upstream connection handling are not implemented yet. `socks5.c` currently reaches `SOCKS5_STATE_REQUEST_READ`, resets the read buffer, and ends the connection.
+What’s still missing or weak in the SOCKS5 part:
 
-The name `socksv5` appears in the NIO code, while the protocol is usually written `socks5`. This is harmless but can be confusing when reading the split between socket glue and protocol code.
+1. Graceful shutdown has no timeout  
+   First `SIGINT` / `SIGTERM` stops accepting and waits for active clients.
+   A second signal force-closes active connections. If a timeout is wanted,
+   it would belong around the draining loop in `main.c`.
+
+## Code Preferences
+
+Do not silence unused parameters with casts like `(void) key;`. If a parameter
+is unused because it belongs to a future stub or callback signature, prefer
+leaving it plainly unused.
