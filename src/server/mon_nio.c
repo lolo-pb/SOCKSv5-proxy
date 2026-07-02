@@ -7,7 +7,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include "access_log.h"
 #include "buffer.h"
+#include "metrics.h"
 #include "mon_parser.h"
 #include "mon_protocol.h"
 #include "selector.h"
@@ -197,6 +199,50 @@ static void mon_process_request(struct mon_conn *conn) {
         {.buf = payload, .offset = 0, .cap = sizeof(payload)};
       user_table_list(list_user_cb, &lc);
       send_response(conn, MON_STATUS_OK, payload, (uint16_t) lc.offset);
+      break;
+    }
+
+    case MON_CMD_GET_METRICS: {
+      const struct metrics *m = metrics_get();
+      uint8_t payload[MON_METRICS_PAYLOAD_LEN];
+      for (int i = 0; i < 8; i++)
+        payload[i] = (m->historic_connections >> (8 * (7 - i))) & 0xFF;
+      for (int i = 0; i < 8; i++)
+        payload[8 + i] = (m->current_connections >> (8 * (7 - i))) & 0xFF;
+      for (int i = 0; i < 8; i++)
+        payload[16 + i] = (m->bytes_transferred >> (8 * (7 - i))) & 0xFF;
+      send_response(conn, MON_STATUS_OK, payload, MON_METRICS_PAYLOAD_LEN);
+      break;
+    }
+
+    case MON_CMD_GET_ACCESS_LOG: {
+      unsigned count;
+      const struct access_entry *entries = access_log_get(&count);
+      unsigned oldest = access_log_oldest_index();
+
+      uint8_t payload[4096];
+      size_t off = 0;
+      for (unsigned i = 0; i < count; i++) {
+        unsigned idx = (oldest + i) % MAX_LOG_ENTRIES;
+        const struct access_entry *e = &entries[idx];
+        uint8_t ulen = (uint8_t) strlen(e->username);
+        uint8_t dlen = (uint8_t) strlen(e->dest_addr);
+
+        if (off + 1 + ulen + 1 + dlen + 2 + 8 > sizeof(payload)) break;
+
+        payload[off++] = ulen;
+        memcpy(payload + off, e->username, ulen);
+        off += ulen;
+        payload[off++] = dlen;
+        memcpy(payload + off, e->dest_addr, dlen);
+        off += dlen;
+        payload[off++] = (e->dest_port >> 8) & 0xFF;
+        payload[off++] = e->dest_port & 0xFF;
+        uint64_t ts = (uint64_t) e->timestamp;
+        for (int j = 0; j < 8; j++)
+          payload[off++] = (ts >> (8 * (7 - j))) & 0xFF;
+      }
+      send_response(conn, MON_STATUS_OK, payload, (uint16_t) off);
       break;
     }
 
