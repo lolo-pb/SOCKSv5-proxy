@@ -13,10 +13,18 @@ OBJECTS_FOLDER=./obj
 
 SERVER_OUTPUT_FILE=$(OUTPUT_FOLDER)/server
 CLIENT_OUTPUT_FILE=$(OUTPUT_FOLDER)/client
+SOCKS_TEST_OUTPUT_FILE=$(OUTPUT_FOLDER)/socks_test
+CHECK_LIBS=-lcheck -lsubunit -lrt -lm
 
 all: client server
 server: $(SERVER_OUTPUT_FILE)
 client: $(CLIENT_OUTPUT_FILE)
+test: $(SOCKS_TEST_OUTPUT_FILE)
+	$(SOCKS_TEST_OUTPUT_FILE)
+
+$(SOCKS_TEST_OUTPUT_FILE): tests/socks_test.c
+	mkdir -p $(OUTPUT_FOLDER)
+	$(COMPILER) $(COMPILER_FLAGS) -I src/shared/include -I src/server/include $< -o $@ $(CHECK_LIBS) $(LD_FLAGS)
 
 $(SERVER_OUTPUT_FILE): $(SERVER_OBJECTS) $(SHARED_OBJECTS)
 	mkdir -p $(OUTPUT_FOLDER)
@@ -36,4 +44,4 @@ clean:
 	rm -rf $(OUTPUT_FOLDER)
 	rm -rf $(OBJECTS_FOLDER)
 
-.PHONY: all server client clean
+.PHONY: all server client test clean
