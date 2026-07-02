@@ -137,6 +137,22 @@ static void send_response(
   if (written > 0) buffer_write_adv(&conn->write_buffer, written);
 }
 
+struct list_ctx {
+  uint8_t *buf;
+  size_t offset;
+  size_t cap;
+};
+
+static void list_user_cb(const char *name, void *ctx) {
+  struct list_ctx *lc = ctx;
+  size_t len = strlen(name);
+  if (lc->offset + len + 1 <= lc->cap) {
+    memcpy(lc->buf + lc->offset, name, len);
+    lc->offset += len;
+    lc->buf[lc->offset++] = '\n';
+  }
+}
+
 static void mon_process_request(struct mon_conn *conn) {
   struct mon_request *req = &conn->parser.request;
 
@@ -154,6 +170,35 @@ static void mon_process_request(struct mon_conn *conn) {
         send_response(conn, MON_STATUS_OK, NULL, 0);
       }
       break;
+
+    case MON_CMD_ADD_USER:
+      if (req->nargs < 2) {
+        send_response(conn, MON_STATUS_INTERNAL_ERROR, NULL, 0);
+      } else if (user_table_add(req->args[0], req->args[1])) {
+        send_response(conn, MON_STATUS_OK, NULL, 0);
+      } else {
+        send_response(conn, MON_STATUS_USER_EXISTS, NULL, 0);
+      }
+      break;
+
+    case MON_CMD_DEL_USER:
+      if (req->nargs < 1) {
+        send_response(conn, MON_STATUS_INTERNAL_ERROR, NULL, 0);
+      } else if (user_table_remove(req->args[0])) {
+        send_response(conn, MON_STATUS_OK, NULL, 0);
+      } else {
+        send_response(conn, MON_STATUS_USER_NOT_FOUND, NULL, 0);
+      }
+      break;
+
+    case MON_CMD_LIST_USERS: {
+      uint8_t payload[2048];
+      struct list_ctx lc =
+        {.buf = payload, .offset = 0, .cap = sizeof(payload)};
+      user_table_list(list_user_cb, &lc);
+      send_response(conn, MON_STATUS_OK, payload, (uint16_t) lc.offset);
+      break;
+    }
 
     default:
       send_response(conn, MON_STATUS_UNKNOWN_CMD, NULL, 0);
