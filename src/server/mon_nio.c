@@ -11,6 +11,7 @@
 #include "mon_parser.h"
 #include "mon_protocol.h"
 #include "selector.h"
+#include "user_table.h"
 
 #define MON_BUF_SIZE 4096
 
@@ -137,6 +138,25 @@ static void send_response(
 }
 
 static void mon_process_request(struct mon_conn *conn) {
-  /* TODO: dispatch commands */
-  send_response(conn, MON_STATUS_UNKNOWN_CMD, NULL, 0);
+  struct mon_request *req = &conn->parser.request;
+
+  if (!conn->authenticated && req->cmd != MON_CMD_AUTH) {
+    send_response(conn, MON_STATUS_AUTH_FAIL, NULL, 0);
+    return;
+  }
+
+  switch (req->cmd) {
+    case MON_CMD_AUTH:
+      if (req->nargs < 2 || !user_table_lookup(req->args[0], req->args[1])) {
+        send_response(conn, MON_STATUS_AUTH_FAIL, NULL, 0);
+      } else {
+        conn->authenticated = true;
+        send_response(conn, MON_STATUS_OK, NULL, 0);
+      }
+      break;
+
+    default:
+      send_response(conn, MON_STATUS_UNKNOWN_CMD, NULL, 0);
+      break;
+  }
 }
