@@ -17,15 +17,18 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>// socket
 #include <sys/types.h> // socket
 #include <unistd.h>
 
+#include "args.h"
 #include "selector.h"
-#include "socks5.h"
 #include "socks5nio.h"
+
+#define SERVER_BACKLOG SOMAXCONN
 
 static bool done = false;
 
@@ -34,28 +37,10 @@ static void sigterm_handler(const int signal) {
   done = true;
 }
 
-int main(const int argc, const char **argv) {
-  unsigned port = 1080;
-
-  if (argc == 1) {
-    // utilizamos el default
-  } else if (argc == 2) {
-    char *end = 0;
-    const long sl = strtol(argv[1], &end, 10);
-
-    if (
-      end == argv[1] || '\0' != *end ||
-      ((LONG_MIN == sl || LONG_MAX == sl) && ERANGE == errno) || sl < 0 ||
-      sl > USHRT_MAX
-    ) {
-      fprintf(stderr, "port should be an integer: %s\n", argv[1]);
-      return 1;
-    }
-    port = sl;
-  } else {
-    fprintf(stderr, "Usage: %s <port>\n", argv[0]);
-    return 1;
-  }
+int main(const int argc, char **argv) {
+  struct socks5args args;
+  parse_args(argc, argv, &args);
+  socksv5_init(&args);
 
   // no tenemos nada que leer de stdin
   close(0);
@@ -67,8 +52,10 @@ int main(const int argc, const char **argv) {
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  addr.sin_port = htons(port);
+  addr.sin_port = htons(args.socks_port);
+  if (inet_pton(AF_INET, args.socks_addr, &addr.sin_addr) != 1) {
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  }
 
   const int server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (server < 0) {
@@ -76,7 +63,14 @@ int main(const int argc, const char **argv) {
     goto finally;
   }
 
-  fprintf(stdout, "Listening on TCP port %d\n", port);
+  fprintf(stdout, "  ______             _                _______  \n");
+  fprintf(stdout, " / _____)           | |              ( ______) \n");
+  fprintf(stdout, "( (____   ___   ____| |  _  ___ _   _| |____   \n");
+  fprintf(stdout, " \\____ \\ / _ \\ / ___) |_/ )/___) | | (_____ \\  \n");
+  fprintf(stdout, " _____) ) |_| ( (___|  _ ((___ )\\ V / _____) ) \n");
+  fprintf(stdout, "(______/ \\___/ \\____)_| \\_(___/  \\_/ (______/  \n");
+
+  fprintf(stdout, "Listening on TCP %s:%d\n", args.socks_addr, args.socks_port);
 
   // man 7 ip. no importa reportar nada si falla.
   setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int));
@@ -86,7 +80,7 @@ int main(const int argc, const char **argv) {
     goto finally;
   }
 
-  if (listen(server, 20) < 0) {
+  if (listen(server, SERVER_BACKLOG) < 0) {
     err_msg = "unable to listen";
     goto finally;
   }
@@ -95,6 +89,7 @@ int main(const int argc, const char **argv) {
   // esto ayuda mucho en herramientas como valgrind.
   signal(SIGTERM, sigterm_handler);
   signal(SIGINT, sigterm_handler);
+  signal(SIGPIPE, SIG_IGN);
 
   if (selector_fd_set_nio(server) == -1) {
     err_msg = "getting server socket flags";
@@ -118,6 +113,7 @@ int main(const int argc, const char **argv) {
     goto finally;
   }
   const struct fd_handler socksv5 = {
+    // aca va la salsa del socks5nio.c
     .handle_read = socksv5_passive_accept,
     .handle_write = NULL,
     .handle_close = NULL,// nada que liberar

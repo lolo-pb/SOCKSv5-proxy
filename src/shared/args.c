@@ -3,9 +3,11 @@
 #include <limits.h> /* LONG_MIN et al */
 #include <stdio.h>  /* for printf */
 #include <stdlib.h> /* for exit */
-#include <string.h> /* memset */
+#include <string.h> /* memset, strcpy */
 
 #include "args.h"
+
+#define DEFAULT_USERS_FILE "users.conf"
 
 static unsigned short port(const char *s) {
   char *end = 0;
@@ -36,6 +38,38 @@ static void user(char *s, struct users *user) {
   }
 }
 
+static void add_user(char *s, struct socks5args *args, int *nusers) {
+  if (*nusers >= MAX_USERS) {
+    fprintf(stderr, "maximun number of users reached: %d.\n", MAX_USERS);
+    exit(1);
+  }
+  user(s, args->users + *nusers);
+  *nusers += 1;
+}
+
+static void users_file(const char *path, struct socks5args *args, int *nusers) {
+  FILE *f = fopen(path, "r");
+  if (f == NULL) {
+    perror(path);
+    exit(1);
+  }
+
+  char line[512];
+  while (fgets(line, sizeof(line), f) != NULL) {
+    line[strcspn(line, "\r\n")] = '\0';
+    if (line[0] == '\0' || line[0] == '#') { continue; }
+    if (*nusers >= MAX_USERS) {
+      fprintf(stderr, "maximun number of users reached: %d.\n", MAX_USERS);
+      fclose(f);
+      exit(1);
+    }
+    strcpy(args->users_storage[*nusers], line);
+    add_user(args->users_storage[*nusers], args, nusers);
+  }
+
+  fclose(f);
+}
+
 static void version(void) {
   fprintf(
     stderr, "socks5v version 0.0\n"
@@ -44,6 +78,7 @@ static void version(void) {
   );
 }
 
+//** AK estan todos los comandos, se pueden ver */
 static void usage(const char *progname) {
   fprintf(
     stderr,
@@ -56,6 +91,8 @@ static void usage(const char *progname) {
     "   -P <conf port>   Puerto entrante conexiones configuracion\n"
     "   -u <name>:<pass> Usuario y contraseña de usuario que puede usar el "
     "proxy. Hasta 10.\n"
+    "   -U[users file]   Archivo con usuarios, uno por línea: <name>:<pass>.\n"
+    "                    Si no se indica archivo usa users.conf.\n"
     "   -v               Imprime información sobre la versión versión y "
     "termina.\n"
 
@@ -85,7 +122,8 @@ void parse_args(const int argc, char **argv, struct socks5args *args) {
     int option_index = 0;
     static struct option long_options[] = {{0, 0, 0, 0}};
 
-    c = getopt_long(argc, argv, "hl:L:Np:P:u:v", long_options, &option_index);
+    c =
+      getopt_long(argc, argv, "hl:L:Np:P:u:U::v", long_options, &option_index);
     if (c == -1) break;
 
     switch (c) {
@@ -108,16 +146,13 @@ void parse_args(const int argc, char **argv, struct socks5args *args) {
         args->mng_port = port(optarg);
         break;
       case 'u':
-        if (nusers >= MAX_USERS) {
-          fprintf(
-            stderr, "maximun number of command line users reached: %d.\n",
-            MAX_USERS
-          );
-          exit(1);
-        } else {
-          user(optarg, args->users + nusers);
-          nusers++;
+        add_user(optarg, args, &nusers);
+        break;
+      case 'U':
+        if (optarg == NULL && optind < argc && argv[optind][0] != '-') {
+          optarg = argv[optind++];
         }
+        users_file(optarg == NULL ? DEFAULT_USERS_FILE : optarg, args, &nusers);
         break;
       case 'v':
         version();

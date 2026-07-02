@@ -21,6 +21,8 @@
  * de selector.c.
  */
 
+struct selector_key;
+
 struct state_machine {
   /** declaración de cual es el estado inicial */
   unsigned initial;
