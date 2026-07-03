@@ -1,6 +1,16 @@
 #ifndef AUTH_H
 #define AUTH_H
 
+/**
+ * auth.h - SOCKSv5 username/password subnegotiation parser (RFC 1929).
+ *
+ *   +----+------+----------+------+----------+
+ *   |VER | ULEN |  UNAME   | PLEN |  PASSWD  |
+ *   +----+------+----------+------+----------+
+ *   | 1  |  1   | 1 to 255 |  1   | 1 to 255 |
+ *   +----+------+----------+------+----------+
+ */
+
 #include <stdbool.h>
 #include <stdint.h>
 

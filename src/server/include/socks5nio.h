@@ -1,6 +1,13 @@
 #ifndef SOCKS5NIO_H
 #define SOCKS5NIO_H
 
+/**
+ * socks5nio.h - non-blocking I/O layer for SOCKS connections.
+ *
+ * Manages the client fd lifecycle: accept, read/write dispatch (to the
+ * STM or relay), pool tracking, and graceful shutdown.
+ */
+
 #include <stddef.h>
 
 #include "args.h"

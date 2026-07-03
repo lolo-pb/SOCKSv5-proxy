@@ -1,6 +1,14 @@
 #ifndef SOCKS5_H
 #define SOCKS5_H
 
+/**
+ * socks5.h - shared state for a single SOCKSv5 connection.
+ *
+ * Each accepted client gets one struct socks5 that lives for the entire
+ * connection lifecycle (hello -> auth -> request -> relay -> close).
+ * Shared between the client fd and origin fd via reference counting.
+ */
+
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdbool.h>
