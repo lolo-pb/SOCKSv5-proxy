@@ -2,15 +2,32 @@
 
 Servidor proxy SOCKSv5 (RFC 1928) con autenticación usuario/contraseña (RFC 1929) y protocolo de monitoreo binario.
 
+## Materiales
+
+| Material | Ubicación |
+|----------|-----------|
+| Informe | `doc/informe/` |
+| Código fuente servidor | `src/server/` |
+| Código fuente cliente | `src/client/` |
+| Código compartido | `src/shared/` |
+| Tests | `tests/` |
+
 ## Build
 
 ```
 make
 ```
 
-Produce `bin/server` y `bin/client`. Requiere gcc con soporte C11.
+Requiere gcc con soporte C11 y pthreads. Produce los binarios en `bin/`.
 
-## Uso
+| Artefacto | Ubicación |
+|-----------|-----------|
+| Servidor proxy | `bin/server` |
+| Cliente monitoreo | `bin/client` |
+
+Para limpiar: `make clean`
+
+## Ejecución
 
 ### Server
 
@@ -31,22 +48,15 @@ Produce `bin/server` y `bin/client`. Requiere gcc con soporte C11.
 ### Client (monitoreo)
 
 ```
-./bin/client -u admin:pass [opciones] <comando>
+./bin/client -u user:pass [opciones] <comando>
 ```
 
-| Comando | Descripción |
-|---------|-------------|
+| Opción/Comando | Descripción |
+|----------------|-------------|
+| `-l addr` | Dirección del servidor (default 127.0.0.1) |
+| `-P port` | Puerto de monitoreo (default 8080) |
+| `-u user:pass` | Credenciales de autenticación |
 | `-m` | Ver métricas |
 | `-U` | Listar usuarios |
 | `-a user:pass` | Agregar usuario |
 | `-d user` | Eliminar usuario |
-
-## Estructura
-
-```
-src/server/    Servidor (SOCKS + monitoreo)
-src/client/    Cliente CLI de monitoreo
-src/shared/    Infraestructura compartida (buffer, selector, stm, parser)
-tests/         Tests unitarios
-doc/           Consigna y material de referencia
-```
