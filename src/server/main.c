@@ -114,11 +114,10 @@ int main(const int argc, char **argv) {
   }
   const struct selector_init conf = {
     .signal = SIGALRM,
-    .select_timeout =
-      {
-        .tv_sec = 10,
-        .tv_nsec = 0,
-      },
+    .select_timeout = {
+      .tv_sec = 10,
+      .tv_nsec = 0,
+    },
   };
   if (0 != selector_init(&conf)) {
     err_msg = "initializing selector";

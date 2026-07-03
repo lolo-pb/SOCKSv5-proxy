@@ -360,8 +360,10 @@ static bool credentials_match(const char *user, const char *pass) {
   for (unsigned i = 0; i < MAX_USERS; i++) {
     const struct users *u = socks5_args->users + i;
     if (u->name == NULL) { continue; }
-    if (strcmp(u->name, user) == 0 && u->pass != NULL &&
-        strcmp(u->pass, pass) == 0) {
+    if (
+      strcmp(u->name, user) == 0 && u->pass != NULL &&
+      strcmp(u->pass, pass) == 0
+    ) {
       return true;
     }
   }

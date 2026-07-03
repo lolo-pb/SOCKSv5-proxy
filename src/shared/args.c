@@ -13,9 +13,11 @@ static unsigned short port(const char *s) {
   char *end = 0;
   const long sl = strtol(s, &end, 10);
 
-  if (end == s || '\0' != *end ||
-      ((LONG_MIN == sl || LONG_MAX == sl) && ERANGE == errno) || sl < 0 ||
-      sl > USHRT_MAX) {
+  if (
+    end == s || '\0' != *end ||
+    ((LONG_MIN == sl || LONG_MAX == sl) && ERANGE == errno) || sl < 0 ||
+    sl > USHRT_MAX
+  ) {
     fprintf(stderr, "port should in in the range of 1-65536: %s\n", s);
     exit(1);
     return 1;
@@ -120,7 +122,8 @@ void parse_args(const int argc, char **argv, struct socks5args *args) {
     int option_index = 0;
     static struct option long_options[] = {{0, 0, 0, 0}};
 
-    c = getopt_long(argc, argv, "hl:L:Np:P:u:U::v", long_options, &option_index);
+    c =
+      getopt_long(argc, argv, "hl:L:Np:P:u:U::v", long_options, &option_index);
     if (c == -1) break;
 
     switch (c) {
