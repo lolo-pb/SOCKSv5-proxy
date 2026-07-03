@@ -16,7 +16,7 @@
 static void usage(const char *progname) {
   fprintf(
     stderr,
-    "Usage: %s [-L addr] [-P port] -u user:pass <command>\n"
+    "Usage: %s [-L addr] [-P port] [-u user:pass] [command]\n"
     "\n"
     "  -L <addr>       management address (default " DEFAULT_MNG_ADDR ")\n"
     "  -P <port>       management port (default %d)\n"
@@ -24,7 +24,7 @@ static void usage(const char *progname) {
     "  -h              print this help and exit\n"
     "  -v              print version and exit\n"
     "\n"
-    "Commands (exactly one):\n"
+    "Commands (optional; omit to open interactive UI):\n"
     "  -m              get metrics\n"
     "  -U              list users\n"
     "  -a <user:pass>  add user\n"
@@ -136,12 +136,7 @@ void client_parse_args(int argc, char **argv, struct client_args *args) {
     usage(argv[0]);
     exit(1);
   }
-  if (args->cmd == CLIENT_CMD_NONE) {
-    fprintf(stderr, "client: no command given\n");
-    usage(argv[0]);
-    exit(1);
-  }
-  if (args->username == NULL) {
+  if (args->cmd != CLIENT_CMD_NONE && args->username == NULL) {
     fprintf(stderr, "client: credentials required (-u user:pass)\n");
     usage(argv[0]);
     exit(1);

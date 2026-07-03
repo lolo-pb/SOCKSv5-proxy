@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "client_args.h"
+#include "client_ui.h"
 #include "mng_client.h"
 #include "selector.h"
 
@@ -23,6 +24,7 @@ static int run_against_addr(
 int main(int argc, char *argv[]) {
   struct client_args args;
   client_parse_args(argc, argv, &args); /* exits on error / -h / -v */
+  if (args.cmd == CLIENT_CMD_NONE) return client_ui_run(&args);
 
   /* a closed peer must not kill us with SIGPIPE; we check send()/recv(). */
   signal(SIGPIPE, SIG_IGN);
