@@ -1,5 +1,6 @@
 #include "socks5.h"
 #include "access_log.h"
+#include "dns_resolver.h"
 #include "metrics.h"
 #include "user_table.h"
 
@@ -40,17 +41,6 @@ static void origin_unregister(struct socks5 *socks, fd_selector selector);
 static void origin_close(struct socks5 *socks, fd_selector selector);
 static void socks5_free(struct socks5 *socks);
 
-// struct to pass dns thread data to main thred
-struct dns_job {
-  struct socks5 *socks;
-  fd_selector selector;
-  int client_fd;
-  char host[256];
-  char service[6];
-};
-
-static void *dns_worker(void *data);
-static void socks5_release_block_data(void *data);
 
 // Selector callbacks for the upstream/origin fd during connect and relay.
 static const struct fd_handler origin_connect_handler = {
@@ -142,7 +132,6 @@ void socks5_release(struct socks5 *socks) {
   }
 }
 
-static void socks5_release_block_data(void *data) { socks5_release(data); }
 
 // Stores the accepted client fd so origin callbacks can resume client writes.
 void socks5_set_client_fd(struct socks5 *socks, const int client_fd) {
@@ -210,7 +199,7 @@ static unsigned start_relay(struct socks5 *socks, fd_selector selector) {
   socks->origin_write_shutdown = false;
   buffer_reset(&socks->read_buffer);
   buffer_reset(&socks->write_buffer);
-  relay_update_interests(socks, selector);// good use of API ദ്ദി（• ˕ •)マ
+  relay_update_interests(socks, selector);
   return SOCKS5_STATE_RELAY;
 }
 
@@ -260,7 +249,7 @@ socks5_relay_client_write(struct socks5 *socks, struct selector_key *key) {
 
 socks5_action
 socks5_handle_read(struct socks5 *socks, struct selector_key *key) {
-  // esto llama al read que corresponda segun el state, osea hello_read o auth_read etc idem lors otros stm_handler
+
   const unsigned state = stm_handler_read(&socks->stm, key);
 
   if (state == SOCKS5_STATE_ERROR || state == SOCKS5_STATE_DONE) {
@@ -478,40 +467,6 @@ static int start_ipv6_connect(struct socks5 *socks, struct selector_key *key) {
   );
 }
 
-static void *dns_worker(void *data) {
-  struct dns_job *job = data;
-  struct socks5 *socks = job->socks;
-  struct addrinfo hints;
-  struct addrinfo *result = NULL;
-
-  memset(&hints, 0, sizeof(hints));
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-
-  const int error = getaddrinfo(job->host, job->service, &hints, &result);
-
-  pthread_mutex_lock(&socks->dns_mutex);
-  socks->dns_pending = false;
-  if (!socks->cancelled) {
-    socks->dns_error = error;
-    socks->dns_result = result;
-    socks->dns_next = result;
-    result = NULL;
-
-    selector_status ss = selector_notify_block_done(
-      job->selector, job->client_fd, socks, socks5_release_block_data
-    );
-    pthread_mutex_unlock(&socks->dns_mutex);
-    if (ss != SELECTOR_SUCCESS) { socks5_release(socks); }
-  } else {
-    pthread_mutex_unlock(&socks->dns_mutex);
-    socks5_release(socks);
-  }
-
-  if (result != NULL) { freeaddrinfo(result); }
-  free(job);
-  return NULL;
-}
 
 // Tries resolved addresses from the current DNS cursor until a connect starts.
 static int
@@ -533,47 +488,6 @@ start_resolved_connect(struct socks5 *socks, struct selector_key *key) {
   return last_error;
 }
 
-static void
-request_port_to_service(const struct socks5 *socks, char service[6]) {
-  const unsigned port =
-    ((unsigned) socks->request.port[0] << 8) | socks->request.port[1];
-  snprintf(service, 6, "%u", port);
-}
-
-// Starts asynchronous DNS resolution for domain-name requests.
-static int
-start_domain_connect(struct socks5 *socks, struct selector_key *key) {
-  struct dns_job *job = malloc(sizeof(*job));
-  if (job == NULL) { return ENOMEM; }
-
-  job->socks = socks;
-  job->selector = key->s;
-  job->client_fd = socks->client_fd;
-  memcpy(job->host, socks->request.address, socks->request.address_len);
-  job->host[socks->request.address_len] = '\0';
-  request_port_to_service(socks, job->service);
-
-  pthread_mutex_lock(&socks->dns_mutex);
-  socks->dns_pending = true;
-  socks->dns_error = 0;
-  socks->dns_result = NULL;
-  socks->dns_next = NULL;
-  pthread_mutex_unlock(&socks->dns_mutex);
-
-  socks5_ref(socks);
-  pthread_t thread;
-  const int status = pthread_create(&thread, NULL, dns_worker, job);
-  if (status != 0) {
-    socks5_release(socks);
-    free(job);
-    pthread_mutex_lock(&socks->dns_mutex);
-    socks->dns_pending = false;
-    pthread_mutex_unlock(&socks->dns_mutex);
-    return status;
-  }
-  pthread_detach(thread);
-  return EINPROGRESS;
-}
 
 // Chooses the origin connect path for the request address type.
 static int
@@ -588,7 +502,7 @@ start_origin_connect(struct socks5 *socks, struct selector_key *key) {
       if (socks->dns_result != NULL || socks->dns_error != 0) {
         return start_resolved_connect(socks, key);
       }
-      return start_domain_connect(socks, key);
+      return dns_resolve_start(socks, key);
     default:
       return EAFNOSUPPORT;
   }

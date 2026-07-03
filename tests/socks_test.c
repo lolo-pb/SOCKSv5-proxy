@@ -533,7 +533,7 @@ START_TEST(test_domain_dns_worker_stores_resolution_result) {
     .fd = socks.client_fd,
     .data = &socks,
   };
-  ck_assert_int_eq(EINPROGRESS, start_domain_connect(&socks, &key));
+  ck_assert_int_eq(EINPROGRESS, dns_resolve_start(&socks, &key));
 
   bool done = false;
   for (int i = 0; i < 200 && !done; i++) {
