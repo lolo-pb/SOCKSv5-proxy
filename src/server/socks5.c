@@ -655,17 +655,21 @@ static unsigned request_write(struct selector_key *key) {
 
   // log successful connection
   char dest_str[256];
+  const char *dest_ptr = NULL;
   uint16_t dest_port =
     ((uint16_t) socks->request.port[0] << 8) | socks->request.port[1];
   if (socks->request.atyp == SOCKS5_ATYP_DOMAINNAME) {
     memcpy(dest_str, socks->request.address, socks->request.address_len);
     dest_str[socks->request.address_len] = '\0';
+    dest_ptr = dest_str;
   } else if (socks->request.atyp == SOCKS5_ATYP_IPV4) {
-    inet_ntop(AF_INET, socks->request.address, dest_str, sizeof(dest_str));
-  } else {
-    inet_ntop(AF_INET6, socks->request.address, dest_str, sizeof(dest_str));
+    dest_ptr =
+      inet_ntop(AF_INET, socks->request.address, dest_str, sizeof(dest_str));
+  } else if (socks->request.atyp == SOCKS5_ATYP_IPV6) {
+    dest_ptr =
+      inet_ntop(AF_INET6, socks->request.address, dest_str, sizeof(dest_str));
   }
-  access_log_add(socks->auth.uname, dest_str, dest_port);
+  access_log_add(socks->auth.uname, dest_ptr, dest_port);
 
   return start_relay(socks, key->s);
 }
