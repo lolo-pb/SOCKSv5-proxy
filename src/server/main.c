@@ -24,10 +24,13 @@
 #include <sys/types.h> // socket
 #include <unistd.h>
 
+#include "access_log.h"
 #include "args.h"
+#include "metrics.h"
 #include "mon_nio.h"
 #include "selector.h"
 #include "socks5nio.h"
+#include "user_table.h"
 
 #define SERVER_BACKLOG SOMAXCONN
 
@@ -51,6 +54,17 @@ int main(const int argc, char **argv) {
   struct socks5args args;
   parse_args(argc, argv, &args);
   socksv5_init(&args);
+
+  user_table_init();
+  metrics_init();
+  access_log_init();
+
+  // load initial users from args into user_table
+  for (unsigned i = 0; i < MAX_USERS; i++) {
+    if (args.users[i].name != NULL) {
+      user_table_add(args.users[i].name, args.users[i].pass);
+    }
+  }
 
   // no tenemos nada que leer de stdin
   close(0);

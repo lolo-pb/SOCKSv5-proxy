@@ -1,5 +1,7 @@
 #include "socks5.h"
+#include "access_log.h"
 #include "metrics.h"
+#include "user_table.h"
 
 #include <errno.h>
 #include <stdbool.h>
@@ -7,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <arpa/inet.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <pthread.h>
@@ -353,19 +356,7 @@ static void auth_read_init(const unsigned state, struct selector_key *key) {
 }
 
 static bool credentials_match(const char *user, const char *pass) {
-  if (socks5_args == NULL) { return false; }
-
-  for (unsigned i = 0; i < MAX_USERS; i++) {
-    const struct users *u = socks5_args->users + i;
-    if (u->name == NULL) { continue; }
-    if (
-      strcmp(u->name, user) == 0 && u->pass != NULL &&
-      strcmp(u->pass, pass) == 0
-    ) {
-      return true;
-    }
-  }
-  return false;
+  return user_table_lookup(user, pass);
 }
 
 static unsigned auth_read(struct selector_key *key) {
@@ -661,6 +652,21 @@ static unsigned request_write(struct selector_key *key) {
   if (socks->request_reply != SOCKS5_REPLY_SUCCEEDED) {
     return SOCKS5_STATE_DONE;
   }
+
+  // log successful connection
+  char dest_str[256];
+  uint16_t dest_port =
+    ((uint16_t) socks->request.port[0] << 8) | socks->request.port[1];
+  if (socks->request.atyp == SOCKS5_ATYP_DOMAINNAME) {
+    memcpy(dest_str, socks->request.address, socks->request.address_len);
+    dest_str[socks->request.address_len] = '\0';
+  } else if (socks->request.atyp == SOCKS5_ATYP_IPV4) {
+    inet_ntop(AF_INET, socks->request.address, dest_str, sizeof(dest_str));
+  } else {
+    inet_ntop(AF_INET6, socks->request.address, dest_str, sizeof(dest_str));
+  }
+  access_log_add(socks->auth.uname, dest_str, dest_port);
+
   return start_relay(socks, key->s);
 }
 
