@@ -399,17 +399,70 @@ static bool run_command(
   return out->status == MON_STATUS_OK;
 }
 
+static void draw_ascii_diagonal_ray(int y, int x, int sy, int sx) {
+  int rows, cols;
+  getmaxyx(stdscr, rows, cols);
+
+  while (y >= 0 && y < rows && x >= 0 && x + 1 < cols) {
+    if (sx == sy) {
+      mvaddch(y, x, '\'');
+      mvaddch(y, x + 1, '.');
+    } else {
+      mvaddch(y, x, '.');
+      mvaddch(y, x + 1, '\'');
+    }
+    y += sy;
+    x += sx * 2;
+  }
+}
+
+static void draw_cube_frame(int top, int left, int height, int width) {
+  int rows, cols;
+  getmaxyx(stdscr, rows, cols);
+  if (rows <= 0 || cols <= 0 || height < 2 || width < 2) return;
+
+  const int bottom = top + height - 1;
+  const int right = left + width - 1;
+
+  draw_ascii_diagonal_ray(top, left - 1, -1, -1);
+  draw_ascii_diagonal_ray(top, right, -1, 1);
+  draw_ascii_diagonal_ray(bottom + 1, left - 2, 1, -1);
+  draw_ascii_diagonal_ray(bottom + 1, right + 1, 1, 1);
+
+  mvaddch(top, left, '.');
+  mvhline(top, left + 1, '.', width - 2);
+  mvaddch(top, right, '.');
+  mvvline(top + 1, left, ':', height - 2);
+  mvvline(top + 1, right, ':', height - 2);
+  mvaddch(bottom, left, ':');
+  mvhline(bottom, left + 1, '.', width - 2);
+  mvaddch(bottom, right, ':');
+}
+
 static void draw_login_form(const struct ui_state *state, int field) {
   int rows, cols;
   getmaxyx(stdscr, rows, cols);
 
-  const int width = 42;
-  const int start_y = rows > 10 ? (rows - 10) / 2 : 0;
-  const int start_x = cols > width ? (cols - width) / 2 : 0;
+  const int box_width = cols < 42 ? cols : 42;
+  const int box_height = rows < 13 ? rows : 13;
+  if (box_width < 4 || box_height < 4) {
+    erase();
+    mvaddstr(0, 0, "terminal too small");
+    refresh();
+    return;
+  }
+
+  const int top = rows > box_height ? (rows - box_height) / 2 : 0;
+  const int left = cols > box_width ? (cols - box_width) / 2 : 0;
+  const int start_y = top + 2;
+  const int start_x = left + 2;
+  const int content_width = box_width - 4;
 
   erase();
+  draw_cube_frame(top, left, box_height, box_width);
+
   mvaddstr(start_y, start_x, "SOCKS5 Manager");
-  mvhline(start_y + 1, start_x, ACS_HLINE, width);
+  mvhline(start_y + 1, start_x, ACS_HLINE, content_width);
 
   mvaddstr(start_y + 3, start_x, field == 0 ? "> Username: " : "  Username: ");
   addnstr(state->username, MAX_CREDENTIAL_LEN);
@@ -419,7 +472,7 @@ static void draw_login_form(const struct ui_state *state, int field) {
 
   mvaddstr(start_y + 8, start_x, "Enter: next/login    Esc: quit");
   if (state->status[0] != '\0')
-    mvaddnstr(start_y + 9, start_x, state->status, STATUS_LEN);
+    mvaddnstr(start_y + 9, start_x, state->status, content_width);
   refresh();
 }
 
@@ -735,13 +788,26 @@ static void draw_main_menu(
   int rows, cols;
   getmaxyx(stdscr, rows, cols);
 
-  const int width = 42;
-  const int start_y = rows > 14 ? (rows - 14) / 2 : 0;
-  const int start_x = cols > width ? (cols - width) / 2 : 0;
+  const int box_width = cols < 42 ? cols : 42;
+  const int box_height = rows < 16 ? rows : 16;
+  if (box_width < 4 || box_height < 4) {
+    erase();
+    mvaddstr(0, 0, "terminal too small");
+    refresh();
+    return;
+  }
+
+  const int top = rows > box_height ? (rows - box_height) / 2 : 0;
+  const int left = cols > box_width ? (cols - box_width) / 2 : 0;
+  const int start_y = top + 2;
+  const int start_x = left + 2;
+  const int content_width = box_width - 4;
 
   erase();
+  draw_cube_frame(top, left, box_height, box_width);
+
   mvaddstr(start_y, start_x, "SOCKS5 Manager");
-  mvhline(start_y + 1, start_x, ACS_HLINE, width);
+  mvhline(start_y + 1, start_x, ACS_HLINE, content_width);
   mvprintw(start_y + 3, start_x, "Logged in as %s", state->username);
 
   for (int i = 0; i < item_count; i++) {
@@ -752,7 +818,7 @@ static void draw_main_menu(
 
   mvaddstr(start_y + 11, start_x, "Enter: select    q/Esc: quit");
   if (message != NULL && message[0] != '\0')
-    mvaddnstr(start_y + 12, start_x, message, width);
+    mvaddnstr(start_y + 12, start_x, message, content_width);
   refresh();
 }
 
