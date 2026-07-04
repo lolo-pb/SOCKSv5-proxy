@@ -3,6 +3,7 @@
 #include <locale.h>
 #include <ncurses.h>
 #include <netdb.h>
+#include <stdlib.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -10,6 +11,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include "mng_client.h"
 #include "mon_protocol.h"
 
 #define AUTH_TIMEOUT_SEC 5
@@ -19,6 +21,14 @@
 #define MAX_CREDENTIAL_LEN 255
 #define STATUS_LEN 128
 #define FRAME_DELAY_MS 150
+#define UI_RESPONSE_BUF_LEN (MON_RESPONSE_HEADER_LEN + (1 << 16))
+
+struct ui_response {
+  uint8_t status;
+  uint16_t payload_len;
+  const uint8_t *payload;
+  uint8_t raw[UI_RESPONSE_BUF_LEN];
+};
 
 struct ui_state {
   const char *mng_addr;
@@ -123,9 +133,15 @@ static void play_intro(void) {
 static const char *mon_status_message(uint8_t status) {
   switch (status) {
     case MON_STATUS_OK:
-      return "login ok";
+      return "ok";
     case MON_STATUS_AUTH_FAIL:
       return "authentication failed";
+    case MON_STATUS_UNKNOWN_CMD:
+      return "unknown command";
+    case MON_STATUS_USER_EXISTS:
+      return "user already exists";
+    case MON_STATUS_USER_NOT_FOUND:
+      return "user not found";
     case MON_STATUS_INTERNAL_ERROR:
       return "server error";
     default:
@@ -134,7 +150,7 @@ static const char *mon_status_message(uint8_t status) {
 }
 
 static bool
-fill_auth_arg(struct mon_request *req, unsigned idx, const char *s) {
+fill_arg(struct mon_request *req, unsigned idx, const char *s) {
   const size_t len = strlen(s);
   if (len > MON_MAX_ARG_LEN) return false;
   req->arg_lens[idx] = (uint8_t) len;
@@ -143,22 +159,29 @@ fill_auth_arg(struct mon_request *req, unsigned idx, const char *s) {
   return true;
 }
 
-static bool build_auth_request(
-  const struct ui_state *state, uint8_t *buf, size_t buf_len, int *request_len
+static bool encode_request(
+  uint8_t cmd, unsigned nargs, const char *arg0, const char *arg1, uint8_t *buf,
+  size_t buf_len, int *request_len
 ) {
   struct mon_request req;
   memset(&req, 0, sizeof(req));
   req.version = MON_VERSION;
-  req.cmd = MON_CMD_AUTH;
-  req.nargs = 2;
+  req.cmd = cmd;
+  req.nargs = (uint8_t) nargs;
 
-  if (!fill_auth_arg(&req, 0, state->username) ||
-      !fill_auth_arg(&req, 1, state->password)) {
-    return false;
-  }
+  if (nargs > 0 && !fill_arg(&req, 0, arg0)) return false;
+  if (nargs > 1 && !fill_arg(&req, 1, arg1)) return false;
 
   *request_len = mon_request_encode(&req, buf, buf_len);
   return *request_len > 0;
+}
+
+static bool build_auth_request(
+  const struct ui_state *state, uint8_t *buf, size_t buf_len, int *request_len
+) {
+  return encode_request(
+    MON_CMD_AUTH, 2, state->username, state->password, buf, buf_len, request_len
+  );
 }
 
 static bool send_all(int fd, const uint8_t *buf, size_t len) {
@@ -189,6 +212,31 @@ static bool recv_auth_response(int fd, uint8_t *status) {
         return false;
       case MON_DECODE_OK:
         *status = resp.status;
+        return true;
+    }
+  }
+  return false;
+}
+
+static bool recv_response(int fd, struct ui_response *out) {
+  size_t used = 0;
+
+  while (used < sizeof(out->raw)) {
+    const ssize_t n = recv(fd, out->raw + used, sizeof(out->raw) - used, 0);
+    if (n <= 0) return false;
+    used += (size_t) n;
+
+    struct mon_response resp;
+    size_t consumed;
+    switch (mon_response_decode(out->raw, used, &resp, &consumed)) {
+      case MON_DECODE_NEED_MORE:
+        break;
+      case MON_DECODE_ERROR:
+        return false;
+      case MON_DECODE_OK:
+        out->status = resp.status;
+        out->payload_len = resp.payload_len;
+        out->payload = resp.payload;
         return true;
     }
   }
@@ -268,6 +316,89 @@ static bool authenticate(struct ui_state *state) {
   return state->authenticated;
 }
 
+static bool perform_command_at_addr(
+  const struct ui_state *state, const struct addrinfo *rp, uint8_t cmd,
+  unsigned nargs, const char *arg0, const char *arg1, struct ui_response *out,
+  char *message, size_t message_len
+) {
+  const int fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+  if (fd < 0) return false;
+
+  const struct timeval timeout = {.tv_sec = AUTH_TIMEOUT_SEC, .tv_usec = 0};
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+  setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+
+  if (connect(fd, rp->ai_addr, rp->ai_addrlen) < 0) {
+    close(fd);
+    return false;
+  }
+
+  uint8_t request[3 + MON_MAX_ARGS * (1 + MON_MAX_ARG_LEN)];
+  int request_len = 0;
+  struct ui_response auth_resp;
+  if (!build_auth_request(state, request, sizeof(request), &request_len) ||
+      !send_all(fd, request, (size_t) request_len) ||
+      !recv_response(fd, &auth_resp)) {
+    close(fd);
+    snprintf(message, message_len, "authentication request failed");
+    return true;
+  }
+
+  if (auth_resp.status != MON_STATUS_OK) {
+    close(fd);
+    snprintf(message, message_len, "%s", mon_status_message(auth_resp.status));
+    return true;
+  }
+
+  if (!encode_request(cmd, nargs, arg0, arg1, request, sizeof(request), &request_len) ||
+      !send_all(fd, request, (size_t) request_len) || !recv_response(fd, out)) {
+    close(fd);
+    snprintf(message, message_len, "command request failed");
+    return true;
+  }
+
+  close(fd);
+  snprintf(message, message_len, "%s", mon_status_message(out->status));
+  return true;
+}
+
+static bool run_command(
+  const struct ui_state *state, uint8_t cmd, unsigned nargs, const char *arg0,
+  const char *arg1, struct ui_response *out, char *message, size_t message_len
+) {
+  char port[6];
+  snprintf(port, sizeof(port), "%u", state->mng_port);
+
+  struct addrinfo hints;
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+
+  struct addrinfo *res = NULL;
+  const int gai = getaddrinfo(state->mng_addr, port, &hints, &res);
+  if (gai != 0) {
+    snprintf(message, message_len, "cannot resolve %s:%s", state->mng_addr, port);
+    return false;
+  }
+
+  bool reached = false;
+  for (const struct addrinfo *rp = res; rp != NULL; rp = rp->ai_next) {
+    if (perform_command_at_addr(
+          state, rp, cmd, nargs, arg0, arg1, out, message, message_len
+        )) {
+      reached = true;
+      break;
+    }
+  }
+  freeaddrinfo(res);
+
+  if (!reached) {
+    snprintf(message, message_len, "could not connect to %s:%s", state->mng_addr, port);
+    return false;
+  }
+  return out->status == MON_STATUS_OK;
+}
+
 static void draw_login_form(const struct ui_state *state, int field) {
   int rows, cols;
   getmaxyx(stdscr, rows, cols);
@@ -339,6 +470,262 @@ static bool run_login(struct ui_state *state) {
   }
 }
 
+typedef int (*payload_formatter)(const uint8_t *payload, size_t len, FILE *out);
+
+static char *
+format_payload(const struct ui_response *resp, payload_formatter formatter) {
+  char *text = NULL;
+  size_t len = 0;
+  FILE *out = open_memstream(&text, &len);
+  if (out == NULL) return NULL;
+
+  if (formatter(resp->payload, resp->payload_len, out) != 0) {
+    fclose(out);
+    free(text);
+    return NULL;
+  }
+
+  fclose(out);
+  return text;
+}
+
+static int text_line_count(const char *text) {
+  int lines = 1;
+  for (const char *p = text; *p != '\0'; p++) {
+    if (*p == '\n') lines++;
+  }
+  return lines;
+}
+
+static void draw_text_screen(const char *title, const char *text, int offset) {
+  int rows, cols;
+  getmaxyx(stdscr, rows, cols);
+
+  erase();
+  mvaddnstr(0, 0, title, cols - 1);
+  mvhline(1, 0, ACS_HLINE, cols);
+
+  const int body_rows = rows > 4 ? rows - 4 : 0;
+  int current = 0;
+  int drawn = 0;
+  const char *line = text;
+  while (*line != '\0' && drawn < body_rows) {
+    const char *end = strchr(line, '\n');
+    const int len = end == NULL ? (int) strlen(line) : (int) (end - line);
+    if (current >= offset) {
+      mvaddnstr(2 + drawn, 0, line, len < cols ? len : cols - 1);
+      drawn++;
+    }
+    current++;
+    if (end == NULL) break;
+    line = end + 1;
+  }
+
+  mvaddstr(rows - 1, 0, "Up/Down/PgUp/PgDn: scroll    b/Esc: back");
+  refresh();
+}
+
+static void show_text_screen(const char *title, const char *text) {
+  int offset = 0;
+  keypad(stdscr, TRUE);
+
+  for (;;) {
+    int rows, cols;
+    getmaxyx(stdscr, rows, cols);
+    (void) cols;
+    const int body_rows = rows > 4 ? rows - 4 : 1;
+    const int max_offset = text_line_count(text) > body_rows
+                             ? text_line_count(text) - body_rows
+                             : 0;
+    if (offset > max_offset) offset = max_offset;
+
+    draw_text_screen(title, text, offset);
+    const int ch = getch();
+    if (ch == 27 || ch == 'b' || ch == 'B' || ch == 'q' || ch == 'Q') return;
+    if (ch == KEY_RESIZE) continue;
+    if (ch == KEY_UP || ch == 'k' || ch == 'K') {
+      if (offset > 0) offset--;
+    } else if (ch == KEY_DOWN || ch == 'j' || ch == 'J') {
+      if (offset < max_offset) offset++;
+    } else if (ch == KEY_PPAGE) {
+      offset = offset > body_rows ? offset - body_rows : 0;
+    } else if (ch == KEY_NPAGE) {
+      offset += body_rows;
+      if (offset > max_offset) offset = max_offset;
+    }
+  }
+}
+
+static void show_message_screen(const char *title, const char *message) {
+  show_text_screen(title, message);
+}
+
+static void fetch_and_show(
+  const struct ui_state *state, uint8_t cmd, const char *title,
+  payload_formatter formatter
+) {
+  struct ui_response resp;
+  char message[STATUS_LEN];
+  if (!run_command(state, cmd, 0, NULL, NULL, &resp, message, sizeof(message))) {
+    show_message_screen(title, message);
+    return;
+  }
+
+  char *text = format_payload(&resp, formatter);
+  if (text == NULL) {
+    show_message_screen(title, "Malformed server response");
+    return;
+  }
+
+  show_text_screen(title, text);
+  free(text);
+}
+
+static void draw_user_form(
+  const char *title, const char *user, const char *pass, int field,
+  bool password_required, const char *message
+) {
+  int rows, cols;
+  getmaxyx(stdscr, rows, cols);
+
+  const int width = 48;
+  const int height = password_required ? 12 : 10;
+  const int start_y = rows > height ? (rows - height) / 2 : 0;
+  const int start_x = cols > width ? (cols - width) / 2 : 0;
+
+  erase();
+  mvaddstr(start_y, start_x, title);
+  mvhline(start_y + 1, start_x, ACS_HLINE, width);
+
+  mvaddstr(start_y + 3, start_x, field == 0 ? "> Username: " : "  Username: ");
+  addnstr(user, MAX_CREDENTIAL_LEN);
+
+  if (password_required) {
+    mvaddstr(start_y + 5, start_x, field == 1 ? "> Password: " : "  Password: ");
+    for (size_t i = 0; i < strlen(pass); i++) addch('*');
+  }
+
+  mvaddstr(
+    start_y + (password_required ? 8 : 6), start_x,
+    "Enter: submit/next    Tab: switch    Esc: cancel"
+  );
+  if (message != NULL && message[0] != '\0')
+    mvaddnstr(start_y + (password_required ? 10 : 8), start_x, message, width);
+  refresh();
+}
+
+static bool run_user_form(
+  const char *title, char *user, char *pass, bool password_required
+) {
+  int field = 0;
+  char message[STATUS_LEN] = "";
+  user[0] = '\0';
+  pass[0] = '\0';
+  keypad(stdscr, TRUE);
+
+  for (;;) {
+    draw_user_form(title, user, pass, field, password_required, message);
+    const int ch = getch();
+
+    if (ch == 27) return false;
+    if (ch == KEY_RESIZE) continue;
+    if (ch == '\t' || ch == KEY_DOWN || ch == KEY_UP) {
+      if (password_required) field = 1 - field;
+      continue;
+    }
+    if (ch == KEY_BACKSPACE || ch == 127 || ch == '\b') {
+      delete_char(field == 0 ? user : pass);
+      continue;
+    }
+    if (ch == '\n' || ch == '\r' || ch == KEY_ENTER) {
+      if (password_required && field == 0) {
+        field = 1;
+        continue;
+      }
+      if (user[0] == '\0' || (password_required && pass[0] == '\0')) {
+        snprintf(message, sizeof(message), "all fields are required");
+        continue;
+      }
+      return true;
+    }
+    if (ch >= 32 && ch <= 126) append_char(field == 0 ? user : pass, ch);
+  }
+}
+
+static void user_command(
+  const struct ui_state *state, uint8_t cmd, const char *user, const char *pass
+) {
+  struct ui_response resp;
+  char message[STATUS_LEN];
+  unsigned nargs = cmd == MON_CMD_ADD_USER ? 2 : 1;
+  run_command(state, cmd, nargs, user, pass, &resp, message, sizeof(message));
+  show_message_screen("Users", message);
+}
+
+static void draw_users_menu(int selected, const char *message) {
+  static const char *items[] = {"List Users", "Add User", "Delete User", "Back"};
+  const int item_count = (int) (sizeof(items) / sizeof(items[0]));
+
+  int rows, cols;
+  getmaxyx(stdscr, rows, cols);
+
+  const int width = 42;
+  const int start_y = rows > 14 ? (rows - 14) / 2 : 0;
+  const int start_x = cols > width ? (cols - width) / 2 : 0;
+
+  erase();
+  mvaddstr(start_y, start_x, "Users");
+  mvhline(start_y + 1, start_x, ACS_HLINE, width);
+  for (int i = 0; i < item_count; i++) {
+    mvprintw(
+      start_y + 3 + i, start_x, "%s %s", selected == i ? ">" : " ", items[i]
+    );
+  }
+  mvaddstr(start_y + 9, start_x, "Enter: select    b/Esc: back");
+  if (message != NULL && message[0] != '\0')
+    mvaddnstr(start_y + 10, start_x, message, width);
+  refresh();
+}
+
+static void run_users_menu(const struct ui_state *state) {
+  int selected = 0;
+  const char *message = "";
+  keypad(stdscr, TRUE);
+
+  for (;;) {
+    draw_users_menu(selected, message);
+    const int ch = getch();
+
+    if (ch == 27 || ch == 'b' || ch == 'B' || ch == 'q' || ch == 'Q') return;
+    if (ch == KEY_RESIZE) continue;
+    if (ch == KEY_UP || ch == 'k' || ch == 'K') {
+      selected = selected == 0 ? 3 : selected - 1;
+      message = "";
+      continue;
+    }
+    if (ch == KEY_DOWN || ch == 'j' || ch == 'J') {
+      selected = selected == 3 ? 0 : selected + 1;
+      message = "";
+      continue;
+    }
+    if (ch == '\n' || ch == '\r' || ch == KEY_ENTER) {
+      char user[MAX_CREDENTIAL_LEN + 1];
+      char pass[MAX_CREDENTIAL_LEN + 1];
+      if (selected == 0) {
+        fetch_and_show(state, MON_CMD_LIST_USERS, "Users", mng_format_users);
+      } else if (selected == 1) {
+        if (run_user_form("Add User", user, pass, true))
+          user_command(state, MON_CMD_ADD_USER, user, pass);
+      } else if (selected == 2) {
+        if (run_user_form("Delete User", user, pass, false))
+          user_command(state, MON_CMD_DEL_USER, user, NULL);
+      } else {
+        return;
+      }
+    }
+  }
+}
+
 static void draw_main_menu(
   const struct ui_state *state, int selected, const char *message
 ) {
@@ -392,7 +779,18 @@ static void run_main_menu(const struct ui_state *state) {
     }
     if (ch == '\n' || ch == '\r' || ch == KEY_ENTER) {
       if (selected == 3) return;
-      message = "Not implemented yet";
+      if (selected == 0) {
+        fetch_and_show(
+          state, MON_CMD_GET_METRICS, "Metrics", mng_format_metrics
+        );
+      } else if (selected == 1) {
+        run_users_menu(state);
+      } else if (selected == 2) {
+        fetch_and_show(
+          state, MON_CMD_GET_ACCESS_LOG, "Access Log", mng_format_access_log
+        );
+      }
+      message = "";
     }
   }
 }
