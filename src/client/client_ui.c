@@ -21,6 +21,7 @@
 #define MAX_CREDENTIAL_LEN 255
 #define STATUS_LEN 128
 #define FRAME_DELAY_MS 150
+#define METRICS_REFRESH_MS 1000
 #define UI_RESPONSE_BUF_LEN (MON_RESPONSE_HEADER_LEN + (1 << 16))
 
 struct ui_response {
@@ -33,11 +34,16 @@ struct ui_response {
 struct ui_state {
   const char *mng_addr;
   unsigned short mng_port;
+  int mng_fd;
   char username[MAX_CREDENTIAL_LEN + 1];
   char password[MAX_CREDENTIAL_LEN + 1];
   char status[STATUS_LEN];
   bool authenticated;
 };
+
+static int connect_authenticated(
+  const struct ui_state *state, char *message, size_t message_len
+);
 
 static size_t utf8_columns(const char *s, size_t len) {
   size_t cols = 0;
@@ -194,30 +200,6 @@ static bool send_all(int fd, const uint8_t *buf, size_t len) {
   return true;
 }
 
-static bool recv_auth_response(int fd, uint8_t *status) {
-  uint8_t buf[MON_RESPONSE_HEADER_LEN + 16];
-  size_t used = 0;
-
-  while (used < sizeof(buf)) {
-    const ssize_t n = recv(fd, buf + used, sizeof(buf) - used, 0);
-    if (n <= 0) return false;
-    used += (size_t) n;
-
-    struct mon_response resp;
-    size_t consumed;
-    switch (mon_response_decode(buf, used, &resp, &consumed)) {
-      case MON_DECODE_NEED_MORE:
-        break;
-      case MON_DECODE_ERROR:
-        return false;
-      case MON_DECODE_OK:
-        *status = resp.status;
-        return true;
-    }
-  }
-  return false;
-}
-
 static bool recv_response(int fd, struct ui_response *out) {
   size_t used = 0;
 
@@ -243,86 +225,56 @@ static bool recv_response(int fd, struct ui_response *out) {
   return false;
 }
 
-static bool try_auth_at_addr(
-  const struct ui_state *state, const struct addrinfo *rp, uint8_t *status
+static bool send_command_on_fd(
+  int fd, uint8_t cmd, unsigned nargs, const char *arg0, const char *arg1,
+  struct ui_response *out
 ) {
-  const int fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-  if (fd < 0) return false;
-
-  const struct timeval timeout = {.tv_sec = AUTH_TIMEOUT_SEC, .tv_usec = 0};
-  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-  setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-
-  if (connect(fd, rp->ai_addr, rp->ai_addrlen) < 0) {
-    close(fd);
-    return false;
-  }
-
   uint8_t request[3 + MON_MAX_ARGS * (1 + MON_MAX_ARG_LEN)];
   int request_len = 0;
-  if (!build_auth_request(state, request, sizeof(request), &request_len)) {
-    close(fd);
-    *status = MON_STATUS_AUTH_FAIL;
-    return true;
-  }
-
-  const bool ok = send_all(fd, request, (size_t) request_len) &&
-                  recv_auth_response(fd, status);
-  close(fd);
-  return ok;
+  return encode_request(
+           cmd, nargs, arg0, arg1, request, sizeof(request), &request_len
+         ) &&
+         send_all(fd, request, (size_t) request_len) && recv_response(fd, out);
 }
 
 static bool authenticate(struct ui_state *state) {
-  char port[6];
-  snprintf(port, sizeof(port), "%u", state->mng_port);
-
-  struct addrinfo hints;
-  memset(&hints, 0, sizeof(hints));
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-
-  struct addrinfo *res = NULL;
-  const int gai = getaddrinfo(state->mng_addr, port, &hints, &res);
-  if (gai != 0) {
-    snprintf(
-      state->status, sizeof(state->status), "cannot resolve %s:%s",
-      state->mng_addr, port
-    );
-    return false;
+  if (state->mng_fd >= 0) {
+    close(state->mng_fd);
+    state->mng_fd = -1;
   }
 
-  uint8_t status = MON_STATUS_INTERNAL_ERROR;
-  bool reached = false;
-  for (const struct addrinfo *rp = res; rp != NULL; rp = rp->ai_next) {
-    if (try_auth_at_addr(state, rp, &status)) {
-      reached = true;
-      break;
-    }
-  }
-  freeaddrinfo(res);
-
-  if (!reached) {
-    snprintf(
-      state->status, sizeof(state->status), "could not connect to %s:%s",
-      state->mng_addr, port
-    );
-    return false;
-  }
-
-  snprintf(
-    state->status, sizeof(state->status), "%s", mon_status_message(status)
-  );
-  state->authenticated = status == MON_STATUS_OK;
+  state->mng_fd =
+    connect_authenticated(state, state->status, sizeof(state->status));
+  if (state->mng_fd >= 0)
+    snprintf(state->status, sizeof(state->status), "%s", mon_status_message(MON_STATUS_OK));
+  state->authenticated = state->mng_fd >= 0;
   return state->authenticated;
 }
 
-static bool perform_command_at_addr(
-  const struct ui_state *state, const struct addrinfo *rp, uint8_t cmd,
-  unsigned nargs, const char *arg0, const char *arg1, struct ui_response *out,
-  char *message, size_t message_len
+static bool run_command(
+  const struct ui_state *state, uint8_t cmd, unsigned nargs, const char *arg0,
+  const char *arg1, struct ui_response *out, char *message, size_t message_len
+) {
+  if (state->mng_fd < 0) {
+    snprintf(message, message_len, "not connected");
+    return false;
+  }
+
+  if (!send_command_on_fd(state->mng_fd, cmd, nargs, arg0, arg1, out)) {
+    snprintf(message, message_len, "command request failed");
+    return false;
+  }
+
+  snprintf(message, message_len, "%s", mon_status_message(out->status));
+  return out->status == MON_STATUS_OK;
+}
+
+static int connect_authenticated_at_addr(
+  const struct ui_state *state, const struct addrinfo *rp, char *message,
+  size_t message_len
 ) {
   const int fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-  if (fd < 0) return false;
+  if (fd < 0) return -1;
 
   const struct timeval timeout = {.tv_sec = AUTH_TIMEOUT_SEC, .tv_usec = 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
@@ -330,7 +282,7 @@ static bool perform_command_at_addr(
 
   if (connect(fd, rp->ai_addr, rp->ai_addrlen) < 0) {
     close(fd);
-    return false;
+    return -1;
   }
 
   uint8_t request[3 + MON_MAX_ARGS * (1 + MON_MAX_ARG_LEN)];
@@ -341,30 +293,20 @@ static bool perform_command_at_addr(
       !recv_response(fd, &auth_resp)) {
     close(fd);
     snprintf(message, message_len, "authentication request failed");
-    return true;
+    return -2;
   }
 
   if (auth_resp.status != MON_STATUS_OK) {
     close(fd);
     snprintf(message, message_len, "%s", mon_status_message(auth_resp.status));
-    return true;
+    return -2;
   }
 
-  if (!encode_request(cmd, nargs, arg0, arg1, request, sizeof(request), &request_len) ||
-      !send_all(fd, request, (size_t) request_len) || !recv_response(fd, out)) {
-    close(fd);
-    snprintf(message, message_len, "command request failed");
-    return true;
-  }
-
-  close(fd);
-  snprintf(message, message_len, "%s", mon_status_message(out->status));
-  return true;
+  return fd;
 }
 
-static bool run_command(
-  const struct ui_state *state, uint8_t cmd, unsigned nargs, const char *arg0,
-  const char *arg1, struct ui_response *out, char *message, size_t message_len
+static int connect_authenticated(
+  const struct ui_state *state, char *message, size_t message_len
 ) {
   char port[6];
   snprintf(port, sizeof(port), "%u", state->mng_port);
@@ -378,25 +320,28 @@ static bool run_command(
   const int gai = getaddrinfo(state->mng_addr, port, &hints, &res);
   if (gai != 0) {
     snprintf(message, message_len, "cannot resolve %s:%s", state->mng_addr, port);
-    return false;
+    return -1;
   }
 
   bool reached = false;
+  int fd = -1;
   for (const struct addrinfo *rp = res; rp != NULL; rp = rp->ai_next) {
-    if (perform_command_at_addr(
-          state, rp, cmd, nargs, arg0, arg1, out, message, message_len
-        )) {
+    fd = connect_authenticated_at_addr(state, rp, message, message_len);
+    if (fd >= 0) {
+      reached = true;
+      break;
+    }
+    if (fd == -2) {
       reached = true;
       break;
     }
   }
   freeaddrinfo(res);
 
-  if (!reached) {
+  if (!reached)
     snprintf(message, message_len, "could not connect to %s:%s", state->mng_addr, port);
-    return false;
-  }
-  return out->status == MON_STATUS_OK;
+
+  return fd;
 }
 
 static void draw_ascii_diagonal_ray(int y, int x, int sy, int sx) {
@@ -550,7 +495,9 @@ static int text_line_count(const char *text) {
   return lines;
 }
 
-static void draw_text_screen(const char *title, const char *text, int offset) {
+static void draw_text_screen_with_footer(
+  const char *title, const char *text, int offset, const char *footer
+) {
   int rows, cols;
   getmaxyx(stdscr, rows, cols);
 
@@ -574,8 +521,14 @@ static void draw_text_screen(const char *title, const char *text, int offset) {
     line = end + 1;
   }
 
-  mvaddstr(rows - 1, 0, "Up/Down/PgUp/PgDn: scroll    b/Esc: back");
+  mvaddnstr(rows - 1, 0, footer, cols - 1);
   refresh();
+}
+
+static void draw_text_screen(const char *title, const char *text, int offset) {
+  draw_text_screen_with_footer(
+    title, text, offset, "Up/Down/PgUp/PgDn: scroll    b/Esc: back"
+  );
 }
 
 static void show_text_screen(const char *title, const char *text) {
@@ -632,6 +585,53 @@ static void fetch_and_show(
 
   show_text_screen(title, text);
   free(text);
+}
+
+static char *copy_text(const char *text) {
+  const size_t len = strlen(text);
+  char *copy = malloc(len + 1);
+  if (copy == NULL) return NULL;
+  memcpy(copy, text, len + 1);
+  return copy;
+}
+
+static char *fetch_metrics_text(int fd) {
+  struct ui_response resp;
+  if (!send_command_on_fd(fd, MON_CMD_GET_METRICS, 0, NULL, NULL, &resp))
+    return copy_text("metrics request failed");
+  if (resp.status != MON_STATUS_OK)
+    return copy_text(mon_status_message(resp.status));
+
+  char *text = format_payload(&resp, mng_format_metrics);
+  if (text == NULL) return copy_text("Malformed server response");
+  return text;
+}
+
+static void show_live_metrics(const struct ui_state *state) {
+  if (state->mng_fd < 0) {
+    show_message_screen("Metrics", "not connected");
+    return;
+  }
+
+  keypad(stdscr, TRUE);
+  timeout(METRICS_REFRESH_MS);
+
+  for (;;) {
+    char *text = fetch_metrics_text(state->mng_fd);
+    if (text == NULL) text = copy_text("out of memory");
+    draw_text_screen_with_footer(
+      "Metrics", text != NULL ? text : "", 0,
+      "Auto-refresh: 1s    r: refresh now    b/Esc: back"
+    );
+    free(text);
+
+    const int ch = getch();
+    if (ch == 27 || ch == 'b' || ch == 'B' || ch == 'q' || ch == 'Q') {
+      timeout(-1);
+      return;
+    }
+    if (ch == ERR || ch == KEY_RESIZE || ch == 'r' || ch == 'R') continue;
+  }
 }
 
 static void draw_user_form(
@@ -846,9 +846,7 @@ static void run_main_menu(const struct ui_state *state) {
     if (ch == '\n' || ch == '\r' || ch == KEY_ENTER) {
       if (selected == 3) return;
       if (selected == 0) {
-        fetch_and_show(
-          state, MON_CMD_GET_METRICS, "Metrics", mng_format_metrics
-        );
+        show_live_metrics(state);
       } else if (selected == 1) {
         run_users_menu(state);
       } else if (selected == 2) {
@@ -866,6 +864,7 @@ int client_ui_run(const struct client_args *args) {
   memset(&state, 0, sizeof(state));
   state.mng_addr = args->mng_addr;
   state.mng_port = args->mng_port;
+  state.mng_fd = -1;
   if (args->username != NULL && args->password != NULL) {
     strncpy(state.username, args->username, MAX_CREDENTIAL_LEN);
     strncpy(state.password, args->password, MAX_CREDENTIAL_LEN);
@@ -884,11 +883,13 @@ int client_ui_run(const struct client_args *args) {
     if (!authenticate(&state)) state.password[0] = '\0';
   }
   if (!state.authenticated && !run_login(&state)) {
+    if (state.mng_fd >= 0) close(state.mng_fd);
     endwin();
     return 0;
   }
   run_main_menu(&state);
 
+  if (state.mng_fd >= 0) close(state.mng_fd);
   endwin();
   return 0;
 }
