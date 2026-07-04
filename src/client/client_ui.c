@@ -119,7 +119,7 @@ static int load_frames(char frames[MAX_FRAMES][MAX_FRAME_SIZE]) {
   return frame_count;
 }
 
-static void play_intro(void) {
+static void play_intro_animation(bool reverse) {
   char frames[MAX_FRAMES][MAX_FRAME_SIZE];
   const int frame_count = load_frames(frames);
   if (frame_count <= 0) {
@@ -131,14 +131,26 @@ static void play_intro(void) {
   }
 
   nodelay(stdscr, TRUE);
-  for (int i = frame_count - 1; i >= 0; i--) {
-    if (getch() != ERR) break;
-    draw_frame(frames[i]);
-    napms(FRAME_DELAY_MS);
+  if (reverse) {
+    for (int i = 0; i < frame_count; i++) {
+      if (getch() != ERR) break;
+      draw_frame(frames[i]);
+      napms(FRAME_DELAY_MS);
+    }
+  } else {
+    for (int i = frame_count - 1; i >= 0; i--) {
+      if (getch() != ERR) break;
+      draw_frame(frames[i]);
+      napms(FRAME_DELAY_MS);
+    }
   }
   nodelay(stdscr, FALSE);
   napms(250);
 }
+
+static void play_intro(void) { play_intro_animation(false); }
+
+static void play_outro(void) { play_intro_animation(true); }
 
 static const char *mon_status_message(uint8_t status) {
   switch (status) {
@@ -897,12 +909,14 @@ int client_ui_run(const struct client_args *args) {
   }
   if (!state.authenticated && !run_login(&state)) {
     if (state.mng_fd >= 0) close(state.mng_fd);
+    play_outro();
     endwin();
     return 0;
   }
   run_main_menu(&state);
 
   if (state.mng_fd >= 0) close(state.mng_fd);
+  play_outro();
   endwin();
   return 0;
 }
