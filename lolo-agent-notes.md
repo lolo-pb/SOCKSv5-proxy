@@ -40,12 +40,20 @@ Build output, like `bin/server` and `bin/client`.
 Compiled object files.
 
 
+## Useful Commands
+
 Useful server args:
 
 ```sh
 ./bin/server -p 1080 -l 0.0.0.0 -u user:pass
 ./bin/server -U users.conf
 ./bin/server -N
+```
+
+Send 1 MiB through the SOCKS proxy with curl:
+
+```sh
+curl --socks5-hostname user:pass@127.0.0.1:1080 -o /dev/null https://speed.cloudflare.com/__down?bytes=1048576
 ```
 
 ## Server Files
@@ -214,11 +222,14 @@ start client with no command
 -> if -u was given, try management auth immediately
 -> otherwise show login form
 -> login sends MON_CMD_AUTH to the management port
--> on success show a temporary "logged in" placeholder
+-> on success show main menu
+-> main menu can show live metrics, users, access log, or quit
+-> on exit, play the intro animation in reverse
 ```
 
-The UI currently only authenticates. The post-login menu and actual management
-actions are not wired into ncurses yet.
+`src/client/ui/`
+Assets and UI helpers for the ncurses client. This includes the intro frames,
+menu transition animation, and the live metrics view.
 
 `src/client/ui/open_animation.txt`
 ASCII/Unicode animation frames. Frames are separated by lines containing only:
