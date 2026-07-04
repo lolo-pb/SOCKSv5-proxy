@@ -24,7 +24,9 @@
 #include <sys/types.h> // socket
 #include <unistd.h>
 
+#include "access_log.h"
 #include "args.h"
+#include "metrics.h"
 #include "mon_nio.h"
 #include "selector.h"
 #include "socks5nio.h"
@@ -48,43 +50,21 @@ static void stop_accepting(fd_selector selector, int *server) {
   *server = -1;
 }
 
-static int passive_socket(const char *listen_addr, unsigned short listen_port) {
-  struct sockaddr_in addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.sin_family = AF_INET;
-  addr.sin_port = htons(listen_port);
-  if (inet_pton(AF_INET, listen_addr, &addr.sin_addr) != 1) {
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  }
-
-  int fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  if (fd < 0) { return -1; }
-
-  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int));
-
-  if (bind(fd, (struct sockaddr *) &addr, sizeof(addr)) < 0 ||
-      listen(fd, SERVER_BACKLOG) < 0) {
-    close(fd);
-    return -1;
-  }
-
-  return fd;
-}
-
-static void init_management_users(const struct socks5args *args) {
-  user_table_init();
-  for (unsigned i = 0; i < MAX_USERS; i++) {
-    if (args->users[i].name != NULL && args->users[i].pass != NULL) {
-      user_table_add(args->users[i].name, args->users[i].pass);
-    }
-  }
-}
-
 int main(const int argc, char **argv) {
   struct socks5args args;
   parse_args(argc, argv, &args);
   socksv5_init(&args);
-  init_management_users(&args);
+
+  user_table_init();
+  metrics_init();
+  access_log_init();
+
+  // load initial users from args into user_table
+  for (unsigned i = 0; i < MAX_USERS; i++) {
+    if (args.users[i].name != NULL) {
+      user_table_add(args.users[i].name, args.users[i].pass);
+    }
+  }
 
   // no tenemos nada que leer de stdin
   close(0);
@@ -92,17 +72,19 @@ int main(const int argc, char **argv) {
   const char *err_msg = NULL;
   selector_status ss = SELECTOR_SUCCESS;
   fd_selector selector = NULL;
-  int server = -1;
   int mng_server = -1;
 
-  server = passive_socket(args.socks_addr, args.socks_port);
-  if (server < 0) {
-    err_msg = "unable to create SOCKS socket";
-    goto finally;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(args.socks_port);
+  if (inet_pton(AF_INET, args.socks_addr, &addr.sin_addr) != 1) {
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
   }
-  mng_server = passive_socket(args.mng_addr, args.mng_port);
-  if (mng_server < 0) {
-    err_msg = "unable to create management socket";
+
+  int server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (server < 0) {
+    err_msg = "unable to create socket";
     goto finally;
   }
 
@@ -115,9 +97,19 @@ int main(const int argc, char **argv) {
   fprintf(stdout, "(______/ \\___/ \\____)_| \\_(___/  \\_/ (______/  \n");
 
   fprintf(stdout, "Listening on TCP %s:%d\n", args.socks_addr, args.socks_port);
-  fprintf(
-    stdout, "Management on TCP %s:%d\n", args.mng_addr, args.mng_port
-  );
+
+  // man 7 ip. no importa reportar nada si falla.
+  setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int));
+
+  if (bind(server, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
+    err_msg = "unable to bind socket";
+    goto finally;
+  }
+
+  if (listen(server, SERVER_BACKLOG) < 0) {
+    err_msg = "unable to listen";
+    goto finally;
+  }
 
   // registrar sigterm es útil para terminar el programa normalmente.
   // esto ayuda mucho en herramientas como valgrind.
@@ -125,8 +117,10 @@ int main(const int argc, char **argv) {
     .sa_handler = sigterm_handler,
   };
   sigemptyset(&shutdown_action.sa_mask);
-  if (sigaction(SIGTERM, &shutdown_action, NULL) == -1 ||
-      sigaction(SIGINT, &shutdown_action, NULL) == -1) {
+  if (
+    sigaction(SIGTERM, &shutdown_action, NULL) == -1 ||
+    sigaction(SIGINT, &shutdown_action, NULL) == -1
+  ) {
     err_msg = "registering signal handlers";
     goto finally;
   }
@@ -134,10 +128,6 @@ int main(const int argc, char **argv) {
 
   if (selector_fd_set_nio(server) == -1) {
     err_msg = "getting server socket flags";
-    goto finally;
-  }
-  if (selector_fd_set_nio(mng_server) == -1) {
-    err_msg = "getting management socket flags";
     goto finally;
   }
   const struct selector_init conf = {
@@ -165,18 +155,49 @@ int main(const int argc, char **argv) {
   };
   ss = selector_register(selector, server, &socksv5, OP_READ, NULL);
   if (ss != SELECTOR_SUCCESS) {
-    err_msg = "registering SOCKS fd";
+    err_msg = "registering fd";
     goto finally;
   }
-  const struct fd_handler mon = {
-    .handle_read = mon_passive_accept,
-    .handle_write = NULL,
-    .handle_close = NULL,
-  };
-  ss = selector_register(selector, mng_server, &mon, OP_READ, NULL);
-  if (ss != SELECTOR_SUCCESS) {
-    err_msg = "registering management fd";
-    goto finally;
+
+  // monitoring passive socket
+  {
+    struct sockaddr_in mng_addr;
+    memset(&mng_addr, 0, sizeof(mng_addr));
+    mng_addr.sin_family = AF_INET;
+    mng_addr.sin_port = htons(args.mng_port);
+    if (inet_pton(AF_INET, args.mng_addr, &mng_addr.sin_addr) != 1) {
+      mng_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    }
+
+    mng_server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (mng_server < 0) {
+      err_msg = "unable to create monitoring socket";
+      goto finally;
+    }
+    setsockopt(mng_server, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int));
+    if (bind(mng_server, (struct sockaddr *) &mng_addr, sizeof(mng_addr)) < 0) {
+      err_msg = "unable to bind monitoring socket";
+      goto finally;
+    }
+    if (listen(mng_server, 5) < 0) {
+      err_msg = "unable to listen on monitoring socket";
+      goto finally;
+    }
+    if (selector_fd_set_nio(mng_server) == -1) {
+      err_msg = "setting monitoring socket non-blocking";
+      goto finally;
+    }
+    const struct fd_handler mon = {
+      .handle_read = mon_passive_accept,
+      .handle_write = NULL,
+      .handle_close = NULL,
+    };
+    ss = selector_register(selector, mng_server, &mon, OP_READ, NULL);
+    if (ss != SELECTOR_SUCCESS) {
+      err_msg = "registering monitoring fd";
+      goto finally;
+    }
+    fprintf(stdout, "Monitoring on TCP %s:%d\n", args.mng_addr, args.mng_port);
   }
   bool draining = false;
   for (;;) {
