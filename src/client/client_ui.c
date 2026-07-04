@@ -339,16 +339,62 @@ static bool run_login(struct ui_state *state) {
   }
 }
 
-static void show_logged_in(const struct ui_state *state) {
+static void draw_main_menu(
+  const struct ui_state *state, int selected, const char *message
+) {
+  static const char *items[] = {"Metrics", "Users", "Access Log", "Quit"};
+  const int item_count = (int) (sizeof(items) / sizeof(items[0]));
+
   int rows, cols;
   getmaxyx(stdscr, rows, cols);
 
+  const int width = 42;
+  const int start_y = rows > 14 ? (rows - 14) / 2 : 0;
+  const int start_x = cols > width ? (cols - width) / 2 : 0;
+
   erase();
-  mvaddstr(rows / 2 - 1, (cols - 16) / 2, "SOCKS5 Manager");
-  mvprintw(rows / 2 + 1, (cols - 18) / 2, "Logged in as %s", state->username);
-  mvaddstr(rows / 2 + 3, (cols - 18) / 2, "Press any key");
+  mvaddstr(start_y, start_x, "SOCKS5 Manager");
+  mvhline(start_y + 1, start_x, ACS_HLINE, width);
+  mvprintw(start_y + 3, start_x, "Logged in as %s", state->username);
+
+  for (int i = 0; i < item_count; i++) {
+    mvprintw(
+      start_y + 5 + i, start_x, "%s %s", selected == i ? ">" : " ", items[i]
+    );
+  }
+
+  mvaddstr(start_y + 11, start_x, "Enter: select    q/Esc: quit");
+  if (message != NULL && message[0] != '\0')
+    mvaddnstr(start_y + 12, start_x, message, width);
   refresh();
-  getch();
+}
+
+static void run_main_menu(const struct ui_state *state) {
+  int selected = 0;
+  const char *message = "";
+  keypad(stdscr, TRUE);
+
+  for (;;) {
+    draw_main_menu(state, selected, message);
+    const int ch = getch();
+
+    if (ch == 27 || ch == 'q' || ch == 'Q') return;
+    if (ch == KEY_RESIZE) continue;
+    if (ch == KEY_UP || ch == 'k' || ch == 'K') {
+      selected = selected == 0 ? 3 : selected - 1;
+      message = "";
+      continue;
+    }
+    if (ch == KEY_DOWN || ch == 'j' || ch == 'J') {
+      selected = selected == 3 ? 0 : selected + 1;
+      message = "";
+      continue;
+    }
+    if (ch == '\n' || ch == '\r' || ch == KEY_ENTER) {
+      if (selected == 3) return;
+      message = "Not implemented yet";
+    }
+  }
 }
 
 int client_ui_run(const struct client_args *args) {
@@ -376,7 +422,7 @@ int client_ui_run(const struct client_args *args) {
     endwin();
     return 0;
   }
-  show_logged_in(&state);
+  run_main_menu(&state);
 
   endwin();
   return 0;
