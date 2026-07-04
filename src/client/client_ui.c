@@ -11,6 +11,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include "ui/menu_animation.h"
 #include "mng_client.h"
 #include "mon_protocol.h"
 
@@ -344,46 +345,6 @@ static int connect_authenticated(
   return fd;
 }
 
-static void draw_ascii_diagonal_ray(int y, int x, int sy, int sx) {
-  int rows, cols;
-  getmaxyx(stdscr, rows, cols);
-
-  while (y >= 0 && y < rows && x >= 0 && x + 1 < cols) {
-    if (sx == sy) {
-      mvaddch(y, x, '\'');
-      mvaddch(y, x + 1, '.');
-    } else {
-      mvaddch(y, x, '.');
-      mvaddch(y, x + 1, '\'');
-    }
-    y += sy;
-    x += sx * 2;
-  }
-}
-
-static void draw_cube_frame(int top, int left, int height, int width) {
-  int rows, cols;
-  getmaxyx(stdscr, rows, cols);
-  if (rows <= 0 || cols <= 0 || height < 2 || width < 2) return;
-
-  const int bottom = top + height - 1;
-  const int right = left + width - 1;
-
-  draw_ascii_diagonal_ray(top, left - 1, -1, -1);
-  draw_ascii_diagonal_ray(top, right, -1, 1);
-  draw_ascii_diagonal_ray(bottom + 1, left - 2, 1, -1);
-  draw_ascii_diagonal_ray(bottom + 1, right + 1, 1, 1);
-
-  mvaddch(top, left, '.');
-  mvhline(top, left + 1, '.', width - 2);
-  mvaddch(top, right, '.');
-  mvvline(top + 1, left, ':', height - 2);
-  mvvline(top + 1, right, ':', height - 2);
-  mvaddch(bottom, left, ':');
-  mvhline(bottom, left + 1, '.', width - 2);
-  mvaddch(bottom, right, ':');
-}
-
 static void draw_login_form(const struct ui_state *state, int field) {
   int rows, cols;
   getmaxyx(stdscr, rows, cols);
@@ -421,6 +382,19 @@ static void draw_login_form(const struct ui_state *state, int field) {
   refresh();
 }
 
+static void animate_login_form_box(void) {
+  int rows, cols;
+  getmaxyx(stdscr, rows, cols);
+
+  const int box_width = cols < 42 ? cols : 42;
+  const int box_height = rows < 13 ? rows : 13;
+  if (box_width < 4 || box_height < 4) return;
+
+  const int top = rows > box_height ? (rows - box_height) / 2 : 0;
+  const int left = cols > box_width ? (cols - box_width) / 2 : 0;
+  animate_menu_box(top, left, box_height, box_width);
+}
+
 static bool append_char(char *dst, int ch) {
   const size_t len = strlen(dst);
   if (len >= MAX_CREDENTIAL_LEN) return false;
@@ -437,6 +411,7 @@ static void delete_char(char *dst) {
 static bool run_login(struct ui_state *state) {
   int field = 0;
   keypad(stdscr, TRUE);
+  animate_login_form_box();
 
   for (;;) {
     draw_login_form(state, field);
@@ -667,6 +642,17 @@ static void draw_user_form(
   refresh();
 }
 
+static void animate_user_form_box(bool password_required) {
+  int rows, cols;
+  getmaxyx(stdscr, rows, cols);
+
+  const int width = 48;
+  const int height = password_required ? 12 : 10;
+  const int start_y = rows > height ? (rows - height) / 2 : 0;
+  const int start_x = cols > width ? (cols - width) / 2 : 0;
+  animate_menu_box(start_y, start_x, height, width);
+}
+
 static bool run_user_form(
   const char *title, char *user, char *pass, bool password_required
 ) {
@@ -675,6 +661,7 @@ static bool run_user_form(
   user[0] = '\0';
   pass[0] = '\0';
   keypad(stdscr, TRUE);
+  animate_user_form_box(password_required);
 
   for (;;) {
     draw_user_form(title, user, pass, field, password_required, message);
@@ -740,10 +727,22 @@ static void draw_users_menu(int selected, const char *message) {
   refresh();
 }
 
+static void animate_users_menu_box(void) {
+  int rows, cols;
+  getmaxyx(stdscr, rows, cols);
+
+  const int width = 42;
+  const int height = 14;
+  const int start_y = rows > height ? (rows - height) / 2 : 0;
+  const int start_x = cols > width ? (cols - width) / 2 : 0;
+  animate_menu_box(start_y, start_x, height, width);
+}
+
 static void run_users_menu(const struct ui_state *state) {
   int selected = 0;
   const char *message = "";
   keypad(stdscr, TRUE);
+  animate_users_menu_box();
 
   for (;;) {
     draw_users_menu(selected, message);
@@ -822,10 +821,24 @@ static void draw_main_menu(
   refresh();
 }
 
+static void animate_main_menu_box(void) {
+  int rows, cols;
+  getmaxyx(stdscr, rows, cols);
+
+  const int box_width = cols < 42 ? cols : 42;
+  const int box_height = rows < 16 ? rows : 16;
+  if (box_width < 4 || box_height < 4) return;
+
+  const int top = rows > box_height ? (rows - box_height) / 2 : 0;
+  const int left = cols > box_width ? (cols - box_width) / 2 : 0;
+  animate_menu_box(top, left, box_height, box_width);
+}
+
 static void run_main_menu(const struct ui_state *state) {
   int selected = 0;
   const char *message = "";
   keypad(stdscr, TRUE);
+  animate_main_menu_box();
 
   for (;;) {
     draw_main_menu(state, selected, message);
