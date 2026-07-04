@@ -125,11 +125,11 @@ static void draw_graph_space(
   getmaxyx(stdscr, rows, cols);
   (void) cols;
 
-  const int label_width = 6;
   const int plot_top = top + 2;
-  const int plot_left = left + 1 + label_width;
+  const int axis_col = left + 5;
+  const int plot_left = axis_col + 1;
   const int plot_height = height - 5;
-  const int plot_width = width - label_width - 3;
+  const int plot_width = width - 8;
   const int axis_y = plot_top + plot_height;
   if (plot_height < 2 || plot_width < 4) {
     mvprintw(top + 1, left + 2, "current: %" PRIu64, current_connections);
@@ -146,7 +146,10 @@ static void draw_graph_space(
     mvprintw(plot_top + row, left + 1, "%4" PRIu64 "|", y_value);
   }
 
+  mvaddch(axis_y, axis_col, '+');
   mvhline(axis_y, plot_left, '-', plot_width);
+
+  if (axis_y + 1 < rows - 1) mvaddstr(axis_y + 1, left + 1, "time");
 
   if (graph == NULL || graph->count == 0) return;
 
