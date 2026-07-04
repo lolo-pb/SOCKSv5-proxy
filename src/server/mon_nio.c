@@ -1,5 +1,7 @@
 #include "mon_nio.h"
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -45,6 +47,16 @@ void mon_passive_accept(struct selector_key *key) {
   const int client = accept(key->fd, (struct sockaddr *) &addr, &addr_len);
   if (client == -1) return;
 
+  char host[INET6_ADDRSTRLEN] = "unknown";
+  if (addr.ss_family == AF_INET) {
+    struct sockaddr_in *in = (struct sockaddr_in *) &addr;
+    inet_ntop(AF_INET, &in->sin_addr, host, sizeof(host));
+  } else if (addr.ss_family == AF_INET6) {
+    struct sockaddr_in6 *in6 = (struct sockaddr_in6 *) &addr;
+    inet_ntop(AF_INET6, &in6->sin6_addr, host, sizeof(host));
+  }
+  fprintf(stderr, " [ You're being monitored by %s ... ]\n", host);
+
   if (selector_fd_set_nio(client) == -1) {
     close(client);
     return;
@@ -60,10 +72,8 @@ void mon_passive_accept(struct selector_key *key) {
   buffer_init(&conn->write_buffer, MON_BUF_SIZE, conn->raw_write);
   mon_parser_init(&conn->parser);
 
-  if (
-    selector_register(key->s, client, &mon_handler, OP_READ, conn) !=
-    SELECTOR_SUCCESS
-  ) {
+  if (selector_register(key->s, client, &mon_handler, OP_READ, conn) !=
+      SELECTOR_SUCCESS) {
     free(conn);
     close(client);
   }
