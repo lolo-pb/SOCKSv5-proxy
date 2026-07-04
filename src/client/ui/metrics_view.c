@@ -121,10 +121,14 @@ static void draw_graph_space(
 ) {
   draw_box(top, left, height, width, "Current Connections");
 
+  int rows, cols;
+  getmaxyx(stdscr, rows, cols);
+  (void) cols;
+
   const int label_width = 6;
-  const int plot_top = top + 1;
+  const int plot_top = top + 2;
   const int plot_left = left + 1 + label_width;
-  const int plot_height = height - 4;
+  const int plot_height = height - 5;
   const int plot_width = width - label_width - 3;
   const int axis_y = plot_top + plot_height;
   if (plot_height < 2 || plot_width < 4) {
@@ -162,6 +166,8 @@ static void draw_graph_space(
     mvaddch(y, x, '*');
     attroff(COLOR_PAIR(METRICS_COLOR_GRAPH_POINT));
   }
+
+  if (axis_y + 1 >= rows - 1) return;
 
   for (unsigned i = 0; i < visible; i++) {
     const unsigned sample_time = first_time + (first + i) * 2;
@@ -206,19 +212,24 @@ static void draw_counters(
 
   const int x = left + 2;
   const int row_width = width - 4;
+  const int last_content_row = top + height - 2;
   const uint64_t bytes = metrics->bytes_transferred;
   const uint64_t kilobytes = bytes / 1000;
   const uint64_t megabytes = kilobytes / 1000;
   const uint64_t gigabytes = megabytes / 1000;
 
-  mvprintw(
-    top + 1, x, "Historic connections: %" PRIu64,
-    metrics->historic_connections
-  );
-  draw_bar_row(top + 3, x, row_width, "Bytes", bytes);
-  draw_bar_row(top + 4, x, row_width, "KiloBytes", kilobytes);
-  draw_bar_row(top + 5, x, row_width, "MegaBytes", megabytes);
-  draw_bar_row(top + 6, x, row_width, "GigaBytes", gigabytes);
+  if (top + 1 <= last_content_row)
+    mvprintw(
+      top + 1, x, "Historic connections: %" PRIu64,
+      metrics->historic_connections
+    );
+  if (top + 3 <= last_content_row) draw_bar_row(top + 3, x, row_width, "Bytes", bytes);
+  if (top + 4 <= last_content_row)
+    draw_bar_row(top + 4, x, row_width, "KiloBytes", kilobytes);
+  if (top + 5 <= last_content_row)
+    draw_bar_row(top + 5, x, row_width, "MegaBytes", megabytes);
+  if (top + 6 <= last_content_row)
+    draw_bar_row(top + 6, x, row_width, "GigaBytes", gigabytes);
 }
 
 void draw_metrics_view(
