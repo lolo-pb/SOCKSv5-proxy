@@ -25,8 +25,10 @@
 #include <unistd.h>
 
 #include "args.h"
+#include "mon_nio.h"
 #include "selector.h"
 #include "socks5nio.h"
+#include "user_table.h"
 
 #define SERVER_BACKLOG SOMAXCONN
 
@@ -46,10 +48,43 @@ static void stop_accepting(fd_selector selector, int *server) {
   *server = -1;
 }
 
+static int passive_socket(const char *listen_addr, unsigned short listen_port) {
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(listen_port);
+  if (inet_pton(AF_INET, listen_addr, &addr.sin_addr) != 1) {
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  }
+
+  int fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (fd < 0) { return -1; }
+
+  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int));
+
+  if (bind(fd, (struct sockaddr *) &addr, sizeof(addr)) < 0 ||
+      listen(fd, SERVER_BACKLOG) < 0) {
+    close(fd);
+    return -1;
+  }
+
+  return fd;
+}
+
+static void init_management_users(const struct socks5args *args) {
+  user_table_init();
+  for (unsigned i = 0; i < MAX_USERS; i++) {
+    if (args->users[i].name != NULL && args->users[i].pass != NULL) {
+      user_table_add(args->users[i].name, args->users[i].pass);
+    }
+  }
+}
+
 int main(const int argc, char **argv) {
   struct socks5args args;
   parse_args(argc, argv, &args);
   socksv5_init(&args);
+  init_management_users(&args);
 
   // no tenemos nada que leer de stdin
   close(0);
@@ -57,18 +92,17 @@ int main(const int argc, char **argv) {
   const char *err_msg = NULL;
   selector_status ss = SELECTOR_SUCCESS;
   fd_selector selector = NULL;
+  int server = -1;
+  int mng_server = -1;
 
-  struct sockaddr_in addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.sin_family = AF_INET;
-  addr.sin_port = htons(args.socks_port);
-  if (inet_pton(AF_INET, args.socks_addr, &addr.sin_addr) != 1) {
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  }
-
-  int server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  server = passive_socket(args.socks_addr, args.socks_port);
   if (server < 0) {
-    err_msg = "unable to create socket";
+    err_msg = "unable to create SOCKS socket";
+    goto finally;
+  }
+  mng_server = passive_socket(args.mng_addr, args.mng_port);
+  if (mng_server < 0) {
+    err_msg = "unable to create management socket";
     goto finally;
   }
 
@@ -81,19 +115,9 @@ int main(const int argc, char **argv) {
   fprintf(stdout, "(______/ \\___/ \\____)_| \\_(___/  \\_/ (______/  \n");
 
   fprintf(stdout, "Listening on TCP %s:%d\n", args.socks_addr, args.socks_port);
-
-  // man 7 ip. no importa reportar nada si falla.
-  setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int));
-
-  if (bind(server, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
-    err_msg = "unable to bind socket";
-    goto finally;
-  }
-
-  if (listen(server, SERVER_BACKLOG) < 0) {
-    err_msg = "unable to listen";
-    goto finally;
-  }
+  fprintf(
+    stdout, "Management on TCP %s:%d\n", args.mng_addr, args.mng_port
+  );
 
   // registrar sigterm es útil para terminar el programa normalmente.
   // esto ayuda mucho en herramientas como valgrind.
@@ -110,6 +134,10 @@ int main(const int argc, char **argv) {
 
   if (selector_fd_set_nio(server) == -1) {
     err_msg = "getting server socket flags";
+    goto finally;
+  }
+  if (selector_fd_set_nio(mng_server) == -1) {
+    err_msg = "getting management socket flags";
     goto finally;
   }
   const struct selector_init conf = {
@@ -137,7 +165,17 @@ int main(const int argc, char **argv) {
   };
   ss = selector_register(selector, server, &socksv5, OP_READ, NULL);
   if (ss != SELECTOR_SUCCESS) {
-    err_msg = "registering fd";
+    err_msg = "registering SOCKS fd";
+    goto finally;
+  }
+  const struct fd_handler mon = {
+    .handle_read = mon_passive_accept,
+    .handle_write = NULL,
+    .handle_close = NULL,
+  };
+  ss = selector_register(selector, mng_server, &mon, OP_READ, NULL);
+  if (ss != SELECTOR_SUCCESS) {
+    err_msg = "registering management fd";
     goto finally;
   }
   bool draining = false;
@@ -147,11 +185,13 @@ int main(const int argc, char **argv) {
         stderr, " : shutdown requested, waiting for active connections\n"
       );
       stop_accepting(selector, &server);
+      stop_accepting(selector, &mng_server);
       draining = true;
     }
     if (shutdown_signals > 1) {
       fprintf(stderr, " : force shutdown requested\n");
       stop_accepting(selector, &server);
+      stop_accepting(selector, &mng_server);
       socksv5_pool_force_shutdown(selector);
       break;
     }
@@ -184,5 +224,6 @@ finally:
   socksv5_pool_destroy();
 
   if (server >= 0) { close(server); }
+  if (mng_server >= 0) { close(mng_server); }
   return ret;
 }

@@ -37,14 +37,19 @@ enum mon_parser_state mon_parser_feed(struct mon_parser *p, uint8_t b) {
 
     case mon_parser_arg_len:
       p->request.arg_lens[p->current_arg] = b;
-      p->current_arg_offset = 0;
-      if (b == 0) {
-        p->request.args[p->current_arg][0] = '\0';
-        p->current_arg++;
-        if (p->current_arg >= p->request.nargs) { p->state = mon_parser_done; }
-        /* else stay in mon_parser_arg_len for next arg */
-      } else {
-        p->state = mon_parser_arg_data;
+      p->current_arg++;
+      if (p->current_arg >= p->request.nargs) {
+        p->current_arg = 0;
+        p->current_arg_offset = 0;
+        while (
+          p->current_arg < p->request.nargs &&
+          p->request.arg_lens[p->current_arg] == 0
+        ) {
+          p->request.args[p->current_arg][0] = '\0';
+          p->current_arg++;
+        }
+        p->state = p->current_arg >= p->request.nargs ? mon_parser_done
+                                                       : mon_parser_arg_data;
       }
       break;
 
@@ -53,10 +58,16 @@ enum mon_parser_state mon_parser_feed(struct mon_parser *p, uint8_t b) {
       if (p->current_arg_offset >= p->request.arg_lens[p->current_arg]) {
         p->request.args[p->current_arg][p->current_arg_offset] = '\0';
         p->current_arg++;
+        p->current_arg_offset = 0;
+        while (
+          p->current_arg < p->request.nargs &&
+          p->request.arg_lens[p->current_arg] == 0
+        ) {
+          p->request.args[p->current_arg][0] = '\0';
+          p->current_arg++;
+        }
         if (p->current_arg >= p->request.nargs) {
           p->state = mon_parser_done;
-        } else {
-          p->state = mon_parser_arg_len;
         }
       }
       break;
