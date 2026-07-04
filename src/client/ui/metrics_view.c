@@ -9,6 +9,7 @@
 #define METRICS_COLOR_BAR_YELLOW 2
 #define METRICS_COLOR_BAR_RED 3
 #define METRICS_COLOR_LOG_NAME 4
+#define METRICS_COLOR_GRAPH_POINT 5
 
 void metrics_view_init_colors(void) {
   if (!has_colors()) return;
@@ -19,6 +20,24 @@ void metrics_view_init_colors(void) {
   init_pair(METRICS_COLOR_BAR_YELLOW, COLOR_YELLOW, -1);
   init_pair(METRICS_COLOR_BAR_RED, COLOR_RED, -1);
   init_pair(METRICS_COLOR_LOG_NAME, COLOR_CYAN, -1);
+  init_pair(METRICS_COLOR_GRAPH_POINT, COLOR_MAGENTA, -1);
+}
+
+void metrics_graph_init(struct metrics_graph *graph) {
+  memset(graph, 0, sizeof(*graph));
+}
+
+void metrics_graph_record(struct metrics_graph *graph, uint64_t current_connections) {
+  if (graph->count < METRICS_GRAPH_MAX_POINTS) {
+    graph->values[graph->count++] = current_connections;
+  } else {
+    memmove(
+      graph->values, graph->values + 1,
+      sizeof(graph->values[0]) * (METRICS_GRAPH_MAX_POINTS - 1)
+    );
+    graph->values[METRICS_GRAPH_MAX_POINTS - 1] = current_connections;
+  }
+  graph->next_time_sec += 2;
 }
 
 static int line_count(const char *text) {
@@ -97,10 +116,61 @@ static void draw_access_log(
 }
 
 static void draw_graph_space(
-  int top, int left, int height, int width, uint64_t current_connections
+  int top, int left, int height, int width, const struct metrics_graph *graph,
+  uint64_t current_connections
 ) {
   draw_box(top, left, height, width, "Current Connections");
-  mvprintw(top + 1, left + 2, "current: %" PRIu64, current_connections);
+
+  const int label_width = 6;
+  const int plot_top = top + 1;
+  const int plot_left = left + 1 + label_width;
+  const int plot_height = height - 4;
+  const int plot_width = width - label_width - 3;
+  const int axis_y = plot_top + plot_height;
+  if (plot_height < 2 || plot_width < 4) {
+    mvprintw(top + 1, left + 2, "current: %" PRIu64, current_connections);
+    return;
+  }
+
+  const uint64_t y_span = (uint64_t) plot_height;
+  const uint64_t y_min =
+    current_connections >= y_span ? current_connections - y_span + 1 : 0;
+  const uint64_t y_max = y_min + y_span - 1;
+
+  for (int row = 0; row < plot_height; row++) {
+    const uint64_t y_value = y_max - (uint64_t) row;
+    mvprintw(plot_top + row, left + 1, "%4" PRIu64 "|", y_value);
+  }
+
+  mvhline(axis_y, plot_left, '-', plot_width);
+
+  if (graph == NULL || graph->count == 0) return;
+
+  const unsigned visible = graph->count < (unsigned) plot_width
+                             ? graph->count
+                             : (unsigned) plot_width;
+  const unsigned first = graph->count - visible;
+  const unsigned first_time = graph->next_time_sec - graph->count * 2;
+
+  for (unsigned i = 0; i < visible; i++) {
+    const uint64_t value = graph->values[first + i];
+    if (value < y_min || value > y_max) continue;
+
+    const int x = plot_left + plot_width - (int) visible + (int) i;
+    const int y = plot_top + (int) (y_max - value);
+    attron(COLOR_PAIR(METRICS_COLOR_GRAPH_POINT));
+    mvaddch(y, x, '*');
+    attroff(COLOR_PAIR(METRICS_COLOR_GRAPH_POINT));
+  }
+
+  for (unsigned i = 0; i < visible; i++) {
+    const unsigned sample_time = first_time + (first + i) * 2;
+    if (sample_time % 10 != 0) continue;
+
+    const int x = plot_left + plot_width - (int) visible + (int) i;
+    if (x + 1 >= left + width - 1) continue;
+    mvprintw(axis_y + 1, x, "%02u", sample_time % 100);
+  }
 }
 
 static void draw_bar_row(
@@ -153,7 +223,7 @@ static void draw_counters(
 
 void draw_metrics_view(
   const struct metrics_view_data *metrics, const char *access_log,
-  int access_log_offset
+  int access_log_offset, const struct metrics_graph *graph
 ) {
   int rows, cols;
   getmaxyx(stdscr, rows, cols);
@@ -174,7 +244,8 @@ void draw_metrics_view(
 
   draw_access_log(0, 0, content_height, left_width, access_log, access_log_offset);
   draw_graph_space(
-    0, left_width, graph_height, right_width, metrics->current_connections
+    0, left_width, graph_height, right_width, graph,
+    metrics->current_connections
   );
   draw_counters(graph_height, left_width, totals_height, right_width, metrics);
 
