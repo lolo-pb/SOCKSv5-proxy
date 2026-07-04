@@ -873,6 +873,7 @@ int client_ui_run(const struct client_args *args) {
 
   setlocale(LC_ALL, "");
   initscr();
+  set_escdelay(25);
   cbreak();
   noecho();
   curs_set(0);
