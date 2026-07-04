@@ -5,6 +5,22 @@
 #include <stdio.h>
 #include <string.h>
 
+#define METRICS_COLOR_BAR_GREEN 1
+#define METRICS_COLOR_BAR_YELLOW 2
+#define METRICS_COLOR_BAR_RED 3
+#define METRICS_COLOR_LOG_NAME 4
+
+void metrics_view_init_colors(void) {
+  if (!has_colors()) return;
+
+  start_color();
+  use_default_colors();
+  init_pair(METRICS_COLOR_BAR_GREEN, COLOR_GREEN, -1);
+  init_pair(METRICS_COLOR_BAR_YELLOW, COLOR_YELLOW, -1);
+  init_pair(METRICS_COLOR_BAR_RED, COLOR_RED, -1);
+  init_pair(METRICS_COLOR_LOG_NAME, COLOR_CYAN, -1);
+}
+
 static int line_count(const char *text) {
   int count = 1;
   for (const char *p = text; p != NULL && *p != '\0'; p++) {
@@ -39,7 +55,11 @@ static void draw_access_log_line(int y, int x, int width, const char *line, int 
   char timestamp[32];
   char user[64];
   if (sscanf(buf, "%31s %63s", timestamp, user) == 2) {
-    mvprintw(y, x, "%.*s  %s", 19, timestamp, user);
+    if (timestamp[10] == 'T') timestamp[10] = ' ';
+    mvprintw(y, x, "%.*s  ", 19, timestamp);
+    attron(COLOR_PAIR(METRICS_COLOR_LOG_NAME));
+    addnstr(user, width > 21 ? width - 21 : 0);
+    attroff(COLOR_PAIR(METRICS_COLOR_LOG_NAME));
   } else {
     mvaddnstr(y, x, line, len < width ? len : width);
   }
@@ -93,7 +113,20 @@ static void draw_bar_row(
   if (value > 0 && filled == 0 && bar_width > 0) filled = 1;
 
   mvprintw(y, x, "%-*s : ", label_width, label);
-  for (int i = 0; i < bar_width; i++) addch(i < filled ? '#' : ' ');
+  for (int i = 0; i < bar_width; i++) {
+    if (i >= filled) {
+      addch(' ');
+      continue;
+    }
+
+    const int color = i < bar_width / 3
+                        ? METRICS_COLOR_BAR_GREEN
+                        : (i < (bar_width * 2) / 3 ? METRICS_COLOR_BAR_YELLOW
+                                                   : METRICS_COLOR_BAR_RED);
+    attron(COLOR_PAIR(color));
+    addch('#');
+    attroff(COLOR_PAIR(color));
+  }
 }
 
 static void draw_counters(

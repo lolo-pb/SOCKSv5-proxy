@@ -1,5 +1,6 @@
 #include "client_ui.h"
 
+#include <limits.h>
 #include <locale.h>
 #include <ncurses.h>
 #include <netdb.h>
@@ -596,7 +597,7 @@ static void show_live_metrics(const struct ui_state *state) {
 
   keypad(stdscr, TRUE);
   timeout(METRICS_REFRESH_MS);
-  int access_log_offset = 0;
+  const int access_log_offset = INT_MAX;
 
   for (;;) {
     struct metrics_view_data metrics = {0};
@@ -609,7 +610,7 @@ static void show_live_metrics(const struct ui_state *state) {
       return;
     }
 
-    draw_metrics_view(&metrics, access_log != NULL ? access_log : "", access_log_offset++);
+    draw_metrics_view(&metrics, access_log != NULL ? access_log : "", access_log_offset);
     free(access_log);
 
     const int ch = getch();
@@ -878,6 +879,7 @@ int client_ui_run(const struct client_args *args) {
   cbreak();
   noecho();
   curs_set(0);
+  metrics_view_init_colors();
 
   play_intro();
   if (state.username[0] != '\0' && state.password[0] != '\0') {
