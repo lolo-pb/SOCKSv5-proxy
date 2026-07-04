@@ -3,6 +3,7 @@
 #include <locale.h>
 #include <ncurses.h>
 #include <netdb.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -11,6 +12,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include "ui/metrics_view.h"
 #include "ui/menu_animation.h"
 #include "mng_client.h"
 #include "mon_protocol.h"
@@ -236,6 +238,12 @@ static bool send_command_on_fd(
            cmd, nargs, arg0, arg1, request, sizeof(request), &request_len
          ) &&
          send_all(fd, request, (size_t) request_len) && recv_response(fd, out);
+}
+
+static uint64_t ui_be_u64(const uint8_t *p) {
+  uint64_t v = 0;
+  for (int i = 0; i < 8; i++) v = (v << 8) | p[i];
+  return v;
 }
 
 static bool authenticate(struct ui_state *state) {
@@ -554,15 +562,29 @@ static char *copy_text(const char *text) {
   return copy;
 }
 
-static char *fetch_metrics_text(int fd) {
+static bool fetch_metrics_data(int fd, struct metrics_view_data *metrics) {
   struct ui_response resp;
   if (!send_command_on_fd(fd, MON_CMD_GET_METRICS, 0, NULL, NULL, &resp))
-    return copy_text("metrics request failed");
+    return false;
+  if (resp.status != MON_STATUS_OK)
+    return false;
+  if (resp.payload_len != MON_METRICS_PAYLOAD_LEN) return false;
+
+  metrics->historic_connections = ui_be_u64(resp.payload);
+  metrics->current_connections = ui_be_u64(resp.payload + 8);
+  metrics->bytes_transferred = ui_be_u64(resp.payload + 16);
+  return true;
+}
+
+static char *fetch_access_log_text(int fd) {
+  struct ui_response resp;
+  if (!send_command_on_fd(fd, MON_CMD_GET_ACCESS_LOG, 0, NULL, NULL, &resp))
+    return copy_text("access log request failed");
   if (resp.status != MON_STATUS_OK)
     return copy_text(mon_status_message(resp.status));
 
-  char *text = format_payload(&resp, mng_format_metrics);
-  if (text == NULL) return copy_text("Malformed server response");
+  char *text = format_payload(&resp, mng_format_access_log);
+  if (text == NULL) return copy_text("Malformed access log response");
   return text;
 }
 
@@ -574,15 +596,21 @@ static void show_live_metrics(const struct ui_state *state) {
 
   keypad(stdscr, TRUE);
   timeout(METRICS_REFRESH_MS);
+  int access_log_offset = 0;
 
   for (;;) {
-    char *text = fetch_metrics_text(state->mng_fd);
-    if (text == NULL) text = copy_text("out of memory");
-    draw_text_screen_with_footer(
-      "Metrics", text != NULL ? text : "", 0,
-      "Auto-refresh: 1s    r: refresh now    b/Esc: back"
-    );
-    free(text);
+    struct metrics_view_data metrics = {0};
+    char *access_log = fetch_access_log_text(state->mng_fd);
+    if (access_log == NULL) access_log = copy_text("out of memory");
+    if (!fetch_metrics_data(state->mng_fd, &metrics)) {
+      free(access_log);
+      timeout(-1);
+      show_message_screen("Metrics", "metrics request failed");
+      return;
+    }
+
+    draw_metrics_view(&metrics, access_log != NULL ? access_log : "", access_log_offset++);
+    free(access_log);
 
     const int ch = getch();
     if (ch == 27 || ch == 'b' || ch == 'B' || ch == 'q' || ch == 'Q') {
