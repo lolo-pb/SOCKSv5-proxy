@@ -1,8 +1,8 @@
 #include "client_ui.h"
 
 #include <locale.h>
-#include <netdb.h>
 #include <ncurses.h>
+#include <netdb.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -18,7 +18,7 @@
 #define MAX_FRAME_SIZE 8192
 #define MAX_CREDENTIAL_LEN 255
 #define STATUS_LEN 128
-#define FRAME_DELAY_MS 200
+#define FRAME_DELAY_MS 150
 
 struct ui_state {
   const char *mng_addr;
@@ -133,7 +133,8 @@ static const char *mon_status_message(uint8_t status) {
   }
 }
 
-static bool fill_auth_arg(struct mon_request *req, unsigned idx, const char *s) {
+static bool
+fill_auth_arg(struct mon_request *req, unsigned idx, const char *s) {
   const size_t len = strlen(s);
   if (len > MON_MAX_ARG_LEN) return false;
   req->arg_lens[idx] = (uint8_t) len;
@@ -142,8 +143,9 @@ static bool fill_auth_arg(struct mon_request *req, unsigned idx, const char *s) 
   return true;
 }
 
-static bool build_auth_request(const struct ui_state *state, uint8_t *buf,
-                               size_t buf_len, int *request_len) {
+static bool build_auth_request(
+  const struct ui_state *state, uint8_t *buf, size_t buf_len, int *request_len
+) {
   struct mon_request req;
   memset(&req, 0, sizeof(req));
   req.version = MON_VERSION;
@@ -193,8 +195,9 @@ static bool recv_auth_response(int fd, uint8_t *status) {
   return false;
 }
 
-static bool try_auth_at_addr(const struct ui_state *state,
-                             const struct addrinfo *rp, uint8_t *status) {
+static bool try_auth_at_addr(
+  const struct ui_state *state, const struct addrinfo *rp, uint8_t *status
+) {
   const int fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
   if (fd < 0) return false;
 
@@ -233,8 +236,10 @@ static bool authenticate(struct ui_state *state) {
   struct addrinfo *res = NULL;
   const int gai = getaddrinfo(state->mng_addr, port, &hints, &res);
   if (gai != 0) {
-    snprintf(state->status, sizeof(state->status), "cannot resolve %s:%s",
-             state->mng_addr, port);
+    snprintf(
+      state->status, sizeof(state->status), "cannot resolve %s:%s",
+      state->mng_addr, port
+    );
     return false;
   }
 
@@ -249,13 +254,16 @@ static bool authenticate(struct ui_state *state) {
   freeaddrinfo(res);
 
   if (!reached) {
-    snprintf(state->status, sizeof(state->status), "could not connect to %s:%s",
-             state->mng_addr, port);
+    snprintf(
+      state->status, sizeof(state->status), "could not connect to %s:%s",
+      state->mng_addr, port
+    );
     return false;
   }
 
-  snprintf(state->status, sizeof(state->status), "%s",
-           mon_status_message(status));
+  snprintf(
+    state->status, sizeof(state->status), "%s", mon_status_message(status)
+  );
   state->authenticated = status == MON_STATUS_OK;
   return state->authenticated;
 }
