@@ -50,11 +50,10 @@ static void set_test_args(void) {
 static void init_selector_for_test(void) {
   const struct selector_init conf = {
     .signal = SIGALRM,
-    .select_timeout =
-      {
-        .tv_sec = 0,
-        .tv_nsec = 1000000,
-      },
+    .select_timeout = {
+      .tv_sec = 0,
+      .tv_nsec = 1000000,
+    },
   };
   ck_assert_int_eq(SELECTOR_SUCCESS, selector_init(&conf));
 }

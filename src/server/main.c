@@ -24,9 +24,13 @@
 #include <sys/types.h> // socket
 #include <unistd.h>
 
+#include "access_log.h"
 #include "args.h"
+#include "metrics.h"
+#include "mon_nio.h"
 #include "selector.h"
 #include "socks5nio.h"
+#include "user_table.h"
 
 #define SERVER_BACKLOG SOMAXCONN
 
@@ -51,12 +55,24 @@ int main(const int argc, char **argv) {
   parse_args(argc, argv, &args);
   socksv5_init(&args);
 
+  user_table_init();
+  metrics_init();
+  access_log_init();
+
+  // load initial users from args into user_table
+  for (unsigned i = 0; i < MAX_USERS; i++) {
+    if (args.users[i].name != NULL) {
+      user_table_add(args.users[i].name, args.users[i].pass);
+    }
+  }
+
   // no tenemos nada que leer de stdin
   close(0);
 
   const char *err_msg = NULL;
   selector_status ss = SELECTOR_SUCCESS;
   fd_selector selector = NULL;
+  int mng_server = -1;
 
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
@@ -101,8 +117,10 @@ int main(const int argc, char **argv) {
     .sa_handler = sigterm_handler,
   };
   sigemptyset(&shutdown_action.sa_mask);
-  if (sigaction(SIGTERM, &shutdown_action, NULL) == -1 ||
-      sigaction(SIGINT, &shutdown_action, NULL) == -1) {
+  if (
+    sigaction(SIGTERM, &shutdown_action, NULL) == -1 ||
+    sigaction(SIGINT, &shutdown_action, NULL) == -1
+  ) {
     err_msg = "registering signal handlers";
     goto finally;
   }
@@ -140,6 +158,47 @@ int main(const int argc, char **argv) {
     err_msg = "registering fd";
     goto finally;
   }
+
+  // monitoring passive socket
+  {
+    struct sockaddr_in mng_addr;
+    memset(&mng_addr, 0, sizeof(mng_addr));
+    mng_addr.sin_family = AF_INET;
+    mng_addr.sin_port = htons(args.mng_port);
+    if (inet_pton(AF_INET, args.mng_addr, &mng_addr.sin_addr) != 1) {
+      mng_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    }
+
+    mng_server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (mng_server < 0) {
+      err_msg = "unable to create monitoring socket";
+      goto finally;
+    }
+    setsockopt(mng_server, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int));
+    if (bind(mng_server, (struct sockaddr *) &mng_addr, sizeof(mng_addr)) < 0) {
+      err_msg = "unable to bind monitoring socket";
+      goto finally;
+    }
+    if (listen(mng_server, 5) < 0) {
+      err_msg = "unable to listen on monitoring socket";
+      goto finally;
+    }
+    if (selector_fd_set_nio(mng_server) == -1) {
+      err_msg = "setting monitoring socket non-blocking";
+      goto finally;
+    }
+    const struct fd_handler mon = {
+      .handle_read = mon_passive_accept,
+      .handle_write = NULL,
+      .handle_close = NULL,
+    };
+    ss = selector_register(selector, mng_server, &mon, OP_READ, NULL);
+    if (ss != SELECTOR_SUCCESS) {
+      err_msg = "registering monitoring fd";
+      goto finally;
+    }
+    fprintf(stdout, "Monitoring on TCP %s:%d\n", args.mng_addr, args.mng_port);
+  }
   bool draining = false;
   for (;;) {
     if (shutdown_signals > 0 && !draining) {
@@ -147,11 +206,13 @@ int main(const int argc, char **argv) {
         stderr, " : shutdown requested, waiting for active connections\n"
       );
       stop_accepting(selector, &server);
+      stop_accepting(selector, &mng_server);
       draining = true;
     }
     if (shutdown_signals > 1) {
       fprintf(stderr, " : force shutdown requested\n");
       stop_accepting(selector, &server);
+      stop_accepting(selector, &mng_server);
       socksv5_pool_force_shutdown(selector);
       break;
     }
@@ -184,5 +245,6 @@ finally:
   socksv5_pool_destroy();
 
   if (server >= 0) { close(server); }
+  if (mng_server >= 0) { close(mng_server); }
   return ret;
 }

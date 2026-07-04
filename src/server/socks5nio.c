@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #include "buffer.h"
+#include "metrics.h"
 #include "selector.h"
 #include "socks5.h"
 #include "socks5nio.h"
@@ -180,6 +181,7 @@ static void socksv5_pool_add(struct socks5 *state) {
   state->pool_next = socksv5_pool;
   socksv5_pool = state;
   socksv5_pool_size++;
+  metrics_connection_opened();
 }
 
 // methods to remove a socks thing to the list
@@ -191,6 +193,7 @@ static void socksv5_pool_remove(struct socks5 *state) {
       *current = state->pool_next;
       state->pool_next = NULL;
       socksv5_pool_size--;
+      metrics_connection_closed();
       return;
     }
     current = &(*current)->pool_next;

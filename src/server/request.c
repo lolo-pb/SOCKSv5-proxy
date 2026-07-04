@@ -16,7 +16,8 @@ void request_parser_init(struct request_parser *p) {
   p->port_index = 0;
 }
 
-enum request_state request_parser_feed(struct request_parser *p, const uint8_t b) {
+enum request_state
+request_parser_feed(struct request_parser *p, const uint8_t b) {
   switch (p->state) {
     case request_version:
       p->state = (b == SOCKS5_VERSION) ? request_command
@@ -115,15 +116,19 @@ int request_marshall_reply(
   addr = zero_addr;
   port = zero_port;
 
-  if (bind_addr != NULL && bind_addr->sa_family == AF_INET &&
-      bind_addr_len >= sizeof(struct sockaddr_in)) {
+  if (
+    bind_addr != NULL && bind_addr->sa_family == AF_INET &&
+    bind_addr_len >= sizeof(struct sockaddr_in)
+  ) {
     const struct sockaddr_in *in = (const struct sockaddr_in *) bind_addr;
     atyp = SOCKS5_ATYP_IPV4;
     addr = &in->sin_addr.s_addr;
     port = &in->sin_port;
     addr_len = 4;
-  } else if (bind_addr != NULL && bind_addr->sa_family == AF_INET6 &&
-             bind_addr_len >= sizeof(struct sockaddr_in6)) {
+  } else if (
+    bind_addr != NULL && bind_addr->sa_family == AF_INET6 &&
+    bind_addr_len >= sizeof(struct sockaddr_in6)
+  ) {
     const struct sockaddr_in6 *in6 = (const struct sockaddr_in6 *) bind_addr;
     atyp = SOCKS5_ATYP_IPV6;
     addr = &in6->sin6_addr.s6_addr;

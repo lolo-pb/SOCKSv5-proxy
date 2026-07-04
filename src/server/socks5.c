@@ -1,4 +1,7 @@
 #include "socks5.h"
+#include "access_log.h"
+#include "metrics.h"
+#include "user_table.h"
 
 #include <errno.h>
 #include <stdbool.h>
@@ -6,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <arpa/inet.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <pthread.h>
@@ -168,14 +172,10 @@ static bool relay_should_close(struct socks5 *socks) {
   const bool origin_to_client_drained = !buffer_can_read(&socks->write_buffer);
 
   if (socks->client_eof && client_to_origin_drained) {
-    relay_shutdown_write_side(
-      socks->origin_fd, &socks->origin_write_shutdown
-    );
+    relay_shutdown_write_side(socks->origin_fd, &socks->origin_write_shutdown);
   }
   if (socks->origin_eof && origin_to_client_drained) {
-    relay_shutdown_write_side(
-      socks->client_fd, &socks->client_write_shutdown
-    );
+    relay_shutdown_write_side(socks->client_fd, &socks->client_write_shutdown);
   }
 
   return socks->client_eof && socks->origin_eof && client_to_origin_drained &&
@@ -248,6 +248,7 @@ socks5_relay_client_write(struct socks5 *socks, struct selector_key *key) {
 
   if (bytes > 0) {
     buffer_read_adv(&socks->write_buffer, bytes);
+    metrics_add_bytes(bytes);
   } else if (bytes < 0 && !is_retryable_io_error()) {
     return SOCKS5_ACTION_CLOSE;
   }
@@ -355,19 +356,7 @@ static void auth_read_init(const unsigned state, struct selector_key *key) {
 }
 
 static bool credentials_match(const char *user, const char *pass) {
-  if (socks5_args == NULL) { return false; }
-
-  for (unsigned i = 0; i < MAX_USERS; i++) {
-    const struct users *u = socks5_args->users + i;
-    if (u->name == NULL) { continue; }
-    if (
-      strcmp(u->name, user) == 0 && u->pass != NULL &&
-      strcmp(u->pass, pass) == 0
-    ) {
-      return true;
-    }
-  }
-  return false;
+  return user_table_lookup(user, pass);
 }
 
 static unsigned auth_read(struct selector_key *key) {
@@ -611,16 +600,19 @@ static unsigned marshall_request_reply(struct socks5 *socks) {
   struct sockaddr *addr = NULL;
   socklen_t addr_len = sizeof(bind_addr);
 
-  if (socks->request_reply == SOCKS5_REPLY_SUCCEEDED && socks->origin_fd >= 0 &&
-      getsockname(socks->origin_fd, (struct sockaddr *) &bind_addr, &addr_len) ==
-        0) {
+  if (
+    socks->request_reply == SOCKS5_REPLY_SUCCEEDED && socks->origin_fd >= 0 &&
+    getsockname(socks->origin_fd, (struct sockaddr *) &bind_addr, &addr_len) ==
+      0
+  ) {
     addr = (struct sockaddr *) &bind_addr;
   }
 
-  if (-1 ==
-      request_marshall_reply(
-        &socks->write_buffer, socks->request_reply, addr, addr_len
-      )) {
+  if (
+    -1 == request_marshall_reply(
+            &socks->write_buffer, socks->request_reply, addr, addr_len
+          )
+  ) {
     return SOCKS5_STATE_ERROR;
   }
   return SOCKS5_STATE_REQUEST_WRITE;
@@ -660,6 +652,25 @@ static unsigned request_write(struct selector_key *key) {
   if (socks->request_reply != SOCKS5_REPLY_SUCCEEDED) {
     return SOCKS5_STATE_DONE;
   }
+
+  // log successful connection
+  char dest_str[256];
+  const char *dest_ptr = NULL;
+  uint16_t dest_port =
+    ((uint16_t) socks->request.port[0] << 8) | socks->request.port[1];
+  if (socks->request.atyp == SOCKS5_ATYP_DOMAINNAME) {
+    memcpy(dest_str, socks->request.address, socks->request.address_len);
+    dest_str[socks->request.address_len] = '\0';
+    dest_ptr = dest_str;
+  } else if (socks->request.atyp == SOCKS5_ATYP_IPV4) {
+    dest_ptr =
+      inet_ntop(AF_INET, socks->request.address, dest_str, sizeof(dest_str));
+  } else if (socks->request.atyp == SOCKS5_ATYP_IPV6) {
+    dest_ptr =
+      inet_ntop(AF_INET6, socks->request.address, dest_str, sizeof(dest_str));
+  }
+  access_log_add(socks->auth.uname, dest_ptr, dest_port);
+
   return start_relay(socks, key->s);
 }
 
@@ -677,8 +688,9 @@ static void origin_connect_write(struct selector_key *key) {
   if (error != 0) {
     origin_close(socks, key->s);
 
-    if (socks->request.atyp == SOCKS5_ATYP_DOMAINNAME &&
-        socks->dns_next != NULL) {
+    if (
+      socks->request.atyp == SOCKS5_ATYP_DOMAINNAME && socks->dns_next != NULL
+    ) {
       error = start_resolved_connect(socks, key);
       if (error == EINPROGRESS) { return; }
       socks->request_reply = socks5_reply_from_errno(error);
@@ -735,6 +747,7 @@ static void origin_write(struct selector_key *key) {
 
   if (bytes > 0) {
     buffer_read_adv(&socks->read_buffer, bytes);
+    metrics_add_bytes(bytes);
   } else if (bytes < 0 && !is_retryable_io_error()) {
     socks5_connection_close(socks, key->s);
     return;
