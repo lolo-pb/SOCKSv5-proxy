@@ -47,16 +47,6 @@ void mon_passive_accept(struct selector_key *key) {
   const int client = accept(key->fd, (struct sockaddr *) &addr, &addr_len);
   if (client == -1) return;
 
-  char host[INET6_ADDRSTRLEN] = "unknown";
-  if (addr.ss_family == AF_INET) {
-    struct sockaddr_in *in = (struct sockaddr_in *) &addr;
-    inet_ntop(AF_INET, &in->sin_addr, host, sizeof(host));
-  } else if (addr.ss_family == AF_INET6) {
-    struct sockaddr_in6 *in6 = (struct sockaddr_in6 *) &addr;
-    inet_ntop(AF_INET6, &in6->sin6_addr, host, sizeof(host));
-  }
-  fprintf(stderr, " [ You're being monitored by %s ... ]\n", host);
-
   if (selector_fd_set_nio(client) == -1) {
     close(client);
     return;
@@ -181,6 +171,7 @@ static void mon_process_request(struct mon_conn *conn) {
         send_response(conn, MON_STATUS_AUTH_FAIL, NULL, 0);
       } else {
         conn->authenticated = true;
+        fprintf(stderr, " [ You're being monitored by %s ... ]\n", req->args[0]);
         send_response(conn, MON_STATUS_OK, NULL, 0);
       }
       break;
