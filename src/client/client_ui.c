@@ -49,6 +49,38 @@ static int connect_authenticated(
   const struct ui_state *state, char *message, size_t message_len
 );
 
+static bool is_enter_key(int ch) {
+  return ch == '\n' || ch == '\r' || ch == KEY_ENTER;
+}
+
+static bool is_back_key(int ch) {
+  return ch == 27 || ch == 'b' || ch == 'B' || ch == 'q' || ch == 'Q';
+}
+
+static bool is_backspace_key(int ch) {
+  return ch == KEY_BACKSPACE || ch == 127 || ch == '\b';
+}
+
+static bool is_up_key(int ch) {
+  return ch == KEY_UP || ch == 'k' || ch == 'K';
+}
+
+static bool is_down_key(int ch) {
+  return ch == KEY_DOWN || ch == 'j' || ch == 'J';
+}
+
+static bool is_printable_ascii(int ch) {
+  return ch >= 32 && ch <= 126;
+}
+
+static int previous_menu_index(int selected, int item_count) {
+  return selected == 0 ? item_count - 1 : selected - 1;
+}
+
+static int next_menu_index(int selected, int item_count) {
+  return selected == item_count - 1 ? 0 : selected + 1;
+}
+
 static size_t utf8_columns(const char *s, size_t len) {
   size_t cols = 0;
   for (size_t i = 0; i < len; i++) {
@@ -428,7 +460,7 @@ static bool run_login(struct ui_state *state) {
       field = 1 - field;
       continue;
     }
-    if (ch == '\n' || ch == '\r' || ch == KEY_ENTER) {
+    if (is_enter_key(ch)) {
       if (field == 0) {
         field = 1;
       } else if (state->username[0] != '\0' && state->password[0] != '\0') {
@@ -438,11 +470,11 @@ static bool run_login(struct ui_state *state) {
       }
       continue;
     }
-    if (ch == KEY_BACKSPACE || ch == 127 || ch == '\b') {
+    if (is_backspace_key(ch)) {
       delete_char(field == 0 ? state->username : state->password);
       continue;
     }
-    if (ch >= 32 && ch <= 126) {
+    if (is_printable_ascii(ch)) {
       append_char(field == 0 ? state->username : state->password, ch);
     }
   }
@@ -527,11 +559,11 @@ static void show_text_screen(const char *title, const char *text) {
 
     draw_text_screen(title, text, offset);
     const int ch = getch();
-    if (ch == 27 || ch == 'b' || ch == 'B' || ch == 'q' || ch == 'Q') return;
+    if (is_back_key(ch)) return;
     if (ch == KEY_RESIZE) continue;
-    if (ch == KEY_UP || ch == 'k' || ch == 'K') {
+    if (is_up_key(ch)) {
       if (offset > 0) offset--;
-    } else if (ch == KEY_DOWN || ch == 'j' || ch == 'J') {
+    } else if (is_down_key(ch)) {
       if (offset < max_offset) offset++;
     } else if (ch == KEY_PPAGE) {
       offset = offset > body_rows ? offset - body_rows : 0;
@@ -635,7 +667,7 @@ static void show_live_metrics(const struct ui_state *state) {
     free(access_log);
 
     const int ch = getch();
-    if (ch == 27 || ch == 'b' || ch == 'B' || ch == 'q' || ch == 'Q') {
+    if (is_back_key(ch)) {
       timeout(-1);
       return;
     }
@@ -695,11 +727,11 @@ static bool run_user_form(
       if (password_required) field = 1 - field;
       continue;
     }
-    if (ch == KEY_BACKSPACE || ch == 127 || ch == '\b') {
+    if (is_backspace_key(ch)) {
       delete_char(field == 0 ? user : pass);
       continue;
     }
-    if (ch == '\n' || ch == '\r' || ch == KEY_ENTER) {
+    if (is_enter_key(ch)) {
       if (password_required && field == 0) {
         field = 1;
         continue;
@@ -710,7 +742,7 @@ static bool run_user_form(
       }
       return true;
     }
-    if (ch >= 32 && ch <= 126) append_char(field == 0 ? user : pass, ch);
+    if (is_printable_ascii(ch)) append_char(field == 0 ? user : pass, ch);
   }
 }
 
@@ -724,9 +756,16 @@ static void user_command(
   show_message_screen("Users", message);
 }
 
+enum {
+  USERS_MENU_LIST,
+  USERS_MENU_ADD,
+  USERS_MENU_DELETE,
+  USERS_MENU_BACK,
+  USERS_MENU_COUNT
+};
+
 static void draw_users_menu(int selected, const char *message) {
   static const char *items[] = {"List Users", "Add User", "Delete User", "Back"};
-  const int item_count = (int) (sizeof(items) / sizeof(items[0]));
 
   int rows, cols;
   getmaxyx(stdscr, rows, cols);
@@ -738,7 +777,7 @@ static void draw_users_menu(int selected, const char *message) {
   erase();
   mvaddstr(start_y, start_x, "Users");
   mvhline(start_y + 1, start_x, ACS_HLINE, width);
-  for (int i = 0; i < item_count; i++) {
+  for (int i = 0; i < USERS_MENU_COUNT; i++) {
     mvprintw(
       start_y + 3 + i, start_x, "%s %s", selected == i ? ">" : " ", items[i]
     );
@@ -758,27 +797,27 @@ static void run_users_menu(const struct ui_state *state) {
     draw_users_menu(selected, message);
     const int ch = getch();
 
-    if (ch == 27 || ch == 'b' || ch == 'B' || ch == 'q' || ch == 'Q') return;
+    if (is_back_key(ch)) return;
     if (ch == KEY_RESIZE) continue;
-    if (ch == KEY_UP || ch == 'k' || ch == 'K') {
-      selected = selected == 0 ? 3 : selected - 1;
+    if (is_up_key(ch)) {
+      selected = previous_menu_index(selected, USERS_MENU_COUNT);
       message = "";
       continue;
     }
-    if (ch == KEY_DOWN || ch == 'j' || ch == 'J') {
-      selected = selected == 3 ? 0 : selected + 1;
+    if (is_down_key(ch)) {
+      selected = next_menu_index(selected, USERS_MENU_COUNT);
       message = "";
       continue;
     }
-    if (ch == '\n' || ch == '\r' || ch == KEY_ENTER) {
+    if (is_enter_key(ch)) {
       char user[MAX_CREDENTIAL_LEN + 1];
       char pass[MAX_CREDENTIAL_LEN + 1];
-      if (selected == 0) {
+      if (selected == USERS_MENU_LIST) {
         fetch_and_show(state, MON_CMD_LIST_USERS, "Users", mng_format_users);
-      } else if (selected == 1) {
+      } else if (selected == USERS_MENU_ADD) {
         if (run_user_form("Add User", user, pass, true))
           user_command(state, MON_CMD_ADD_USER, user, pass);
-      } else if (selected == 2) {
+      } else if (selected == USERS_MENU_DELETE) {
         if (run_user_form("Delete User", user, pass, false))
           user_command(state, MON_CMD_DEL_USER, user, NULL);
       } else {
@@ -788,11 +827,18 @@ static void run_users_menu(const struct ui_state *state) {
   }
 }
 
+enum {
+  MAIN_MENU_METRICS,
+  MAIN_MENU_USERS,
+  MAIN_MENU_ACCESS_LOG,
+  MAIN_MENU_QUIT,
+  MAIN_MENU_COUNT
+};
+
 static void draw_main_menu(
   const struct ui_state *state, int selected, const char *message
 ) {
   static const char *items[] = {"Metrics", "Users", "Access Log", "Quit"};
-  const int item_count = (int) (sizeof(items) / sizeof(items[0]));
 
   int rows, cols;
   getmaxyx(stdscr, rows, cols);
@@ -819,7 +865,7 @@ static void draw_main_menu(
   mvhline(start_y + 1, start_x, ACS_HLINE, content_width);
   mvprintw(start_y + 3, start_x, "Logged in as %s", state->username);
 
-  for (int i = 0; i < item_count; i++) {
+  for (int i = 0; i < MAIN_MENU_COUNT; i++) {
     mvprintw(
       start_y + 5 + i, start_x, "%s %s", selected == i ? ">" : " ", items[i]
     );
@@ -856,23 +902,23 @@ static void run_main_menu(const struct ui_state *state) {
 
     if (ch == 27 || ch == 'q' || ch == 'Q') return;
     if (ch == KEY_RESIZE) continue;
-    if (ch == KEY_UP || ch == 'k' || ch == 'K') {
-      selected = selected == 0 ? 3 : selected - 1;
+    if (is_up_key(ch)) {
+      selected = previous_menu_index(selected, MAIN_MENU_COUNT);
       message = "";
       continue;
     }
-    if (ch == KEY_DOWN || ch == 'j' || ch == 'J') {
-      selected = selected == 3 ? 0 : selected + 1;
+    if (is_down_key(ch)) {
+      selected = next_menu_index(selected, MAIN_MENU_COUNT);
       message = "";
       continue;
     }
-    if (ch == '\n' || ch == '\r' || ch == KEY_ENTER) {
-      if (selected == 3) return;
-      if (selected == 0) {
+    if (is_enter_key(ch)) {
+      if (selected == MAIN_MENU_QUIT) return;
+      if (selected == MAIN_MENU_METRICS) {
         show_live_metrics(state);
-      } else if (selected == 1) {
+      } else if (selected == MAIN_MENU_USERS) {
         run_users_menu(state);
-      } else if (selected == 2) {
+      } else if (selected == MAIN_MENU_ACCESS_LOG) {
         fetch_and_show(
           state, MON_CMD_GET_ACCESS_LOG, "Access Log", mng_format_access_log
         );
