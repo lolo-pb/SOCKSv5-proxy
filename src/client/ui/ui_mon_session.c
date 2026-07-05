@@ -1,4 +1,4 @@
-#include "ui_mng_session.h"
+#include "ui_mon_session.h"
 
 #include <netdb.h>
 #include <stdlib.h>
@@ -7,7 +7,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-#include "mng_client.h"
+#include "mon_client.h"
 
 #define AUTH_TIMEOUT_SEC 5
 
@@ -138,7 +138,7 @@ static int connect_authenticated(
   const struct ui_state *state, char *message, size_t message_len
 ) {
   char port[6];
-  snprintf(port, sizeof(port), "%u", state->mng_port);
+  snprintf(port, sizeof(port), "%u", state->mon_port);
 
   struct addrinfo hints;
   memset(&hints, 0, sizeof(hints));
@@ -146,9 +146,9 @@ static int connect_authenticated(
   hints.ai_socktype = SOCK_STREAM;
 
   struct addrinfo *res = NULL;
-  const int gai = getaddrinfo(state->mng_addr, port, &hints, &res);
+  const int gai = getaddrinfo(state->mon_addr, port, &hints, &res);
   if (gai != 0) {
-    snprintf(message, message_len, "cannot resolve %s:%s", state->mng_addr, port);
+    snprintf(message, message_len, "cannot resolve %s:%s", state->mon_addr, port);
     return -1;
   }
 
@@ -168,7 +168,7 @@ static int connect_authenticated(
   freeaddrinfo(res);
 
   if (!reached)
-    snprintf(message, message_len, "could not connect to %s:%s", state->mng_addr, port);
+    snprintf(message, message_len, "could not connect to %s:%s", state->mon_addr, port);
 
   return fd;
 }
@@ -193,19 +193,19 @@ const char *ui_mon_status_message(uint8_t status) {
 }
 
 bool ui_authenticate(struct ui_state *state) {
-  if (state->mng_fd >= 0) {
-    close(state->mng_fd);
-    state->mng_fd = -1;
+  if (state->mon_fd >= 0) {
+    close(state->mon_fd);
+    state->mon_fd = -1;
   }
 
-  state->mng_fd =
+  state->mon_fd =
     connect_authenticated(state, state->status, sizeof(state->status));
-  if (state->mng_fd >= 0)
+  if (state->mon_fd >= 0)
     snprintf(
       state->status, sizeof(state->status), "%s",
       ui_mon_status_message(MON_STATUS_OK)
     );
-  state->authenticated = state->mng_fd >= 0;
+  state->authenticated = state->mon_fd >= 0;
   return state->authenticated;
 }
 
@@ -213,12 +213,12 @@ bool ui_run_command(
   const struct ui_state *state, uint8_t cmd, unsigned nargs, const char *arg0,
   const char *arg1, struct ui_response *out, char *message, size_t message_len
 ) {
-  if (state->mng_fd < 0) {
+  if (state->mon_fd < 0) {
     snprintf(message, message_len, "not connected");
     return false;
   }
 
-  if (!send_command_on_fd(state->mng_fd, cmd, nargs, arg0, arg1, out)) {
+  if (!send_command_on_fd(state->mon_fd, cmd, nargs, arg0, arg1, out)) {
     snprintf(message, message_len, "command request failed");
     return false;
   }
@@ -274,7 +274,7 @@ char *ui_fetch_access_log_text(int fd) {
   if (resp.status != MON_STATUS_OK)
     return ui_copy_text(ui_mon_status_message(resp.status));
 
-  char *text = ui_format_payload(&resp, mng_format_access_log);
+  char *text = ui_format_payload(&resp, mon_format_access_log);
   if (text == NULL) return ui_copy_text("Malformed access log response");
   return text;
 }

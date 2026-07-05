@@ -1,4 +1,4 @@
-#include "mng_client.h"
+#include "mon_client.h"
 
 #include <errno.h>
 #include <inttypes.h>
@@ -7,10 +7,10 @@
 #include <time.h>
 #include <unistd.h>
 
-#define ATTACHMENT(key) ((struct mng_client *) (key)->data)
+#define ATTACHMENT(key) ((struct mon_client *) (key)->data)
 
 /* state machine states (must stay correlative, see stm_init) */
-enum mng_state {
+enum mon_state {
   ST_CONNECTING = 0,
   ST_SEND_AUTH,
   ST_RECV_AUTH,
@@ -66,7 +66,7 @@ static bool fill_arg(struct mon_request *req, unsigned idx, const char *s) {
   return true;
 }
 
-static bool build_auth_request(struct mng_client *d, struct mon_request *req) {
+static bool build_auth_request(struct mon_client *d, struct mon_request *req) {
   memset(req, 0, sizeof(*req));
   req->version = MON_VERSION;
   req->cmd = MON_CMD_AUTH;
@@ -75,7 +75,7 @@ static bool build_auth_request(struct mng_client *d, struct mon_request *req) {
          fill_arg(req, 1, d->args->password);
 }
 
-static bool build_cmd_request(struct mng_client *d, struct mon_request *req) {
+static bool build_cmd_request(struct mon_client *d, struct mon_request *req) {
   memset(req, 0, sizeof(*req));
   req->version = MON_VERSION;
   switch (d->args->cmd) {
@@ -103,7 +103,7 @@ static bool build_cmd_request(struct mng_client *d, struct mon_request *req) {
 }
 
 /* encode req and append it to the write buffer */
-static bool queue_request(struct mng_client *d, const struct mon_request *req) {
+static bool queue_request(struct mon_client *d, const struct mon_request *req) {
   uint8_t tmp[3 + MON_MAX_ARGS * (1 + MON_MAX_ARG_LEN)];
   const int n = mon_request_encode(req, tmp, sizeof(tmp));
   if (n < 0) return false;
@@ -119,7 +119,7 @@ static bool queue_request(struct mng_client *d, const struct mon_request *req) {
 /* response payload formatters                                        */
 /* ------------------------------------------------------------------ */
 
-int mng_format_metrics(const uint8_t *payload, size_t len, FILE *out) {
+int mon_format_metrics(const uint8_t *payload, size_t len, FILE *out) {
   if (payload == NULL || len != MON_METRICS_PAYLOAD_LEN) return -1;
   fprintf(out, "Historic connections: %" PRIu64 "\n", be_u64(payload));
   fprintf(out, "Current connections:  %" PRIu64 "\n", be_u64(payload + 8));
@@ -127,7 +127,7 @@ int mng_format_metrics(const uint8_t *payload, size_t len, FILE *out) {
   return 0;
 }
 
-int mng_format_users(const uint8_t *payload, size_t len, FILE *out) {
+int mon_format_users(const uint8_t *payload, size_t len, FILE *out) {
   if (payload == NULL || len < 1) return -1;
   const uint8_t count = payload[0];
   size_t off = 1;
@@ -142,7 +142,7 @@ int mng_format_users(const uint8_t *payload, size_t len, FILE *out) {
   return 0;
 }
 
-int mng_format_access_log(const uint8_t *payload, size_t len, FILE *out) {
+int mon_format_access_log(const uint8_t *payload, size_t len, FILE *out) {
   if (payload == NULL || len < 2) return -1;
   const uint16_t count = be_u16(payload);
   size_t off = 2;
@@ -188,7 +188,7 @@ on_cmd_ok(struct selector_key *key, const struct mon_response *resp);
 
 /* OP_WRITE: connect() has completed (or failed) */
 static unsigned on_connecting(struct selector_key *key) {
-  struct mng_client *d = ATTACHMENT(key);
+  struct mon_client *d = ATTACHMENT(key);
   int soerr = 0;
   socklen_t l = sizeof(soerr);
   if (getsockopt(key->fd, SOL_SOCKET, SO_ERROR, &soerr, &l) < 0 || soerr != 0) {
@@ -198,7 +198,7 @@ static unsigned on_connecting(struct selector_key *key) {
   struct mon_request req;
   if (!build_auth_request(d, &req) || !queue_request(d, &req)) {
     fprintf(stderr, "client: credentials too long\n");
-    d->result = MNG_EXIT_IO;
+    d->result = MON_EXIT_IO;
     return ST_ERROR;
   }
   return ST_SEND_AUTH; /* interest is already OP_WRITE */
@@ -207,19 +207,19 @@ static unsigned on_connecting(struct selector_key *key) {
 /* drain the write buffer; when empty switch to reading the response */
 static unsigned
 send_buffer(struct selector_key *key, unsigned self, unsigned next) {
-  struct mng_client *d = ATTACHMENT(key);
+  struct mon_client *d = ATTACHMENT(key);
   size_t n;
   uint8_t *p = buffer_read_ptr(&d->write_buffer, &n);
   const ssize_t sent = send(key->fd, p, n, 0);
   if (sent < 0) {
     if (errno == EAGAIN || errno == EWOULDBLOCK) return self;
-    d->result = MNG_EXIT_IO;
+    d->result = MON_EXIT_IO;
     return ST_ERROR;
   }
   buffer_read_adv(&d->write_buffer, sent);
   if (buffer_can_read(&d->write_buffer)) return self; /* partial write */
   if (selector_set_interest_key(key, OP_READ) != SELECTOR_SUCCESS) {
-    d->result = MNG_EXIT_IO;
+    d->result = MON_EXIT_IO;
     return ST_ERROR;
   }
   return next;
@@ -236,23 +236,23 @@ static unsigned on_send_cmd(struct selector_key *key) {
 /* accumulate bytes until a full response frame can be decoded */
 static unsigned
 recv_response(struct selector_key *key, unsigned self, bool is_auth) {
-  struct mng_client *d = ATTACHMENT(key);
+  struct mon_client *d = ATTACHMENT(key);
   size_t space;
   uint8_t *ptr = buffer_write_ptr(&d->read_buffer, &space);
   if (space == 0) {
     fprintf(stderr, "client: response too large\n");
-    d->result = MNG_EXIT_MALFORMED;
+    d->result = MON_EXIT_MALFORMED;
     return ST_ERROR;
   }
   const ssize_t n = recv(key->fd, ptr, space, 0);
   if (n == 0) {
     fprintf(stderr, "client: server closed the connection\n");
-    d->result = MNG_EXIT_IO;
+    d->result = MON_EXIT_IO;
     return ST_ERROR;
   }
   if (n < 0) {
     if (errno == EAGAIN || errno == EWOULDBLOCK) return self;
-    d->result = MNG_EXIT_IO;
+    d->result = MON_EXIT_IO;
     return ST_ERROR;
   }
   buffer_write_adv(&d->read_buffer, n);
@@ -266,7 +266,7 @@ recv_response(struct selector_key *key, unsigned self, bool is_auth) {
       return self;
     case MON_DECODE_ERROR:
       fprintf(stderr, "client: malformed response\n");
-      d->result = MNG_EXIT_MALFORMED;
+      d->result = MON_EXIT_MALFORMED;
       return ST_ERROR;
     case MON_DECODE_OK:
       buffer_read_adv(&d->read_buffer, consumed);
@@ -285,20 +285,20 @@ static unsigned on_recv_cmd(struct selector_key *key) {
 
 static unsigned
 on_auth_ok(struct selector_key *key, const struct mon_response *resp) {
-  struct mng_client *d = ATTACHMENT(key);
+  struct mon_client *d = ATTACHMENT(key);
   if (resp->status != MON_STATUS_OK) {
     fprintf(stderr, "client: %s\n", status_str(resp->status));
-    d->result = MNG_EXIT_AUTH;
+    d->result = MON_EXIT_AUTH;
     return ST_ERROR;
   }
   struct mon_request req;
   if (!build_cmd_request(d, &req) || !queue_request(d, &req)) {
     fprintf(stderr, "client: argument too long\n");
-    d->result = MNG_EXIT_IO;
+    d->result = MON_EXIT_IO;
     return ST_ERROR;
   }
   if (selector_set_interest_key(key, OP_WRITE) != SELECTOR_SUCCESS) {
-    d->result = MNG_EXIT_IO;
+    d->result = MON_EXIT_IO;
     return ST_ERROR;
   }
   return ST_SEND_CMD;
@@ -306,22 +306,22 @@ on_auth_ok(struct selector_key *key, const struct mon_response *resp) {
 
 static unsigned
 on_cmd_ok(struct selector_key *key, const struct mon_response *resp) {
-  struct mng_client *d = ATTACHMENT(key);
+  struct mon_client *d = ATTACHMENT(key);
   if (resp->status != MON_STATUS_OK) {
     fprintf(stderr, "client: %s\n", status_str(resp->status));
-    d->result = MNG_EXIT_CMD;
+    d->result = MON_EXIT_CMD;
     return ST_ERROR;
   }
   int rc = 0;
   switch (d->args->cmd) {
     case CLIENT_CMD_METRICS:
-      rc = mng_format_metrics(resp->payload, resp->payload_len, stdout);
+      rc = mon_format_metrics(resp->payload, resp->payload_len, stdout);
       break;
     case CLIENT_CMD_LIST_USERS:
-      rc = mng_format_users(resp->payload, resp->payload_len, stdout);
+      rc = mon_format_users(resp->payload, resp->payload_len, stdout);
       break;
     case CLIENT_CMD_ACCESS_LOG:
-      rc = mng_format_access_log(resp->payload, resp->payload_len, stdout);
+      rc = mon_format_access_log(resp->payload, resp->payload_len, stdout);
       break;
     case CLIENT_CMD_ADD_USER:
       fprintf(stdout, "user '%s' added\n", d->args->arg_user);
@@ -334,10 +334,10 @@ on_cmd_ok(struct selector_key *key, const struct mon_response *resp) {
   }
   if (rc != 0) {
     fprintf(stderr, "client: malformed response payload\n");
-    d->result = MNG_EXIT_MALFORMED;
+    d->result = MON_EXIT_MALFORMED;
     return ST_ERROR;
   }
-  d->result = MNG_EXIT_OK;
+  d->result = MON_EXIT_OK;
   return ST_DONE;
 }
 
@@ -355,41 +355,41 @@ static const struct state_definition states[] = {
   {.state = ST_ERROR},
 };
 
-static void mng_finish(struct selector_key *key) {
-  struct mng_client *d = ATTACHMENT(key);
+static void mon_finish(struct selector_key *key) {
+  struct mon_client *d = ATTACHMENT(key);
   d->finished = true;
   selector_unregister_fd(key->s, key->fd);
   close(key->fd);
 }
 
-static void mng_read(struct selector_key *key) {
+static void mon_read(struct selector_key *key) {
   const unsigned st = stm_handler_read(&ATTACHMENT(key)->stm, key);
-  if (st == ST_DONE || st == ST_ERROR) mng_finish(key);
+  if (st == ST_DONE || st == ST_ERROR) mon_finish(key);
 }
 
-static void mng_write(struct selector_key *key) {
+static void mon_write(struct selector_key *key) {
   const unsigned st = stm_handler_write(&ATTACHMENT(key)->stm, key);
-  if (st == ST_DONE || st == ST_ERROR) mng_finish(key);
+  if (st == ST_DONE || st == ST_ERROR) mon_finish(key);
 }
 
-static void mng_close(struct selector_key *key) {
+static void mon_close(struct selector_key *key) {
   (void) key; /* the struct is owned and freed by main() */
 }
 
 static const struct fd_handler handler = {
-  .handle_read = mng_read,
-  .handle_write = mng_write,
-  .handle_close = mng_close,
+  .handle_read = mon_read,
+  .handle_write = mon_write,
+  .handle_close = mon_close,
   .handle_block_done = NULL,
 };
 
-const struct fd_handler *mng_client_handler(void) { return &handler; }
+const struct fd_handler *mon_client_handler(void) { return &handler; }
 
-void mng_client_init(struct mng_client *c, const struct client_args *args) {
+void mon_client_init(struct mon_client *c, const struct client_args *args) {
   c->args = args;
   c->finished = false;
   c->connect_failed = false;
-  c->result = MNG_EXIT_OK;
+  c->result = MON_EXIT_OK;
   buffer_init(&c->read_buffer, sizeof(c->raw_read), c->raw_read);
   buffer_init(&c->write_buffer, sizeof(c->raw_write), c->raw_write);
   c->stm.initial = ST_CONNECTING;

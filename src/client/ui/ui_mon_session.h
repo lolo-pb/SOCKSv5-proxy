@@ -1,5 +1,5 @@
-#ifndef UI_MNG_SESSION_H
-#define UI_MNG_SESSION_H
+#ifndef UI_MON_SESSION_H
+#define UI_MON_SESSION_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -21,9 +21,9 @@ struct ui_response {
 };
 
 struct ui_state {
-  const char *mng_addr;
-  unsigned short mng_port;
-  int mng_fd;
+  const char *mon_addr;
+  unsigned short mon_port;
+  int mon_fd;
   char username[MAX_CREDENTIAL_LEN + 1];
   char password[MAX_CREDENTIAL_LEN + 1];
   char status[STATUS_LEN];

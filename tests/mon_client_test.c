@@ -9,8 +9,8 @@
  *   gcc -std=c11 -D_POSIX_C_SOURCE=200809L -Wall \
  *       -I src/shared/include -I src/server/include -I src/client/include \
  *       -I src/shared -I src/client \
- *       tests/mng_client_test.c src/shared/buffer.c src/shared/selector.c \
- *       src/shared/stm.c -o /tmp/mng_client_test && /tmp/mng_client_test
+ *       tests/mon_client_test.c src/shared/buffer.c src/shared/selector.c \
+ *       src/shared/stm.c -o /tmp/mon_client_test && /tmp/mon_client_test
  */
 #include <arpa/inet.h>
 #include <assert.h>
@@ -24,7 +24,7 @@
 #include <unistd.h>
 
 /* pull in the units under test (and their static helpers) */
-#include "mng_client.c"
+#include "mon_client.c"
 #include "mon_protocol.c"
 
 /* ------------------------------------------------------------------ */
@@ -96,27 +96,27 @@ static void test_format_metrics(void) {
   p[22] = 0x03; /* bytes    = 1000  */
   p[23] = 0xE8;
   char out[256] = {0};
-  assert(render(mng_format_metrics, p, sizeof(p), out, sizeof(out)) == 0);
+  assert(render(mon_format_metrics, p, sizeof(p), out, sizeof(out)) == 0);
   assert(strstr(out, "Historic connections: 5") != NULL);
   assert(strstr(out, "Current connections:  2") != NULL);
   assert(strstr(out, "Bytes transferred:    1000") != NULL);
   /* wrong length is rejected */
-  assert(render(mng_format_metrics, p, sizeof(p) - 1, out, sizeof(out)) == -1);
+  assert(render(mon_format_metrics, p, sizeof(p) - 1, out, sizeof(out)) == -1);
 }
 
 static void test_format_users(void) {
   const uint8_t ok[] = {2, 5, 'a', 'l', 'i', 'c', 'e', 3, 'b', 'o', 'b'};
   char out[128] = {0};
-  assert(render(mng_format_users, ok, sizeof(ok), out, sizeof(out)) == 0);
+  assert(render(mon_format_users, ok, sizeof(ok), out, sizeof(out)) == 0);
   assert(strstr(out, "alice") != NULL);
   assert(strstr(out, "bob") != NULL);
 
   /* claims 2 users but only carries one */
   const uint8_t bad[] = {2, 5, 'a', 'l', 'i', 'c', 'e'};
-  assert(render(mng_format_users, bad, sizeof(bad), out, sizeof(out)) == -1);
+  assert(render(mon_format_users, bad, sizeof(bad), out, sizeof(out)) == -1);
 
   const uint8_t empty[] = {0};
-  assert(render(mng_format_users, empty, sizeof(empty), out, sizeof(out)) == 0);
+  assert(render(mon_format_users, empty, sizeof(empty), out, sizeof(out)) == 0);
 }
 
 static void test_format_access_log(void) {
@@ -128,19 +128,19 @@ static void test_format_access_log(void) {
     7,    '1',  '.', '2', '.', '3', '.', '4', /* addr = 1.2.3.4     */
   };
   char out[256] = {0};
-  assert(render(mng_format_access_log, e, sizeof(e), out, sizeof(out)) == 0);
+  assert(render(mon_format_access_log, e, sizeof(e), out, sizeof(out)) == 0);
   assert(strstr(out, "1970-01-01T00:00:00Z") != NULL);
   assert(strstr(out, "bob") != NULL);
   assert(strstr(out, "1.2.3.4:8080") != NULL);
 
   /* truncated last byte */
   assert(
-    render(mng_format_access_log, e, sizeof(e) - 1, out, sizeof(out)) == -1
+    render(mon_format_access_log, e, sizeof(e) - 1, out, sizeof(out)) == -1
   );
 
   const uint8_t empty[] = {0, 0};
   assert(
-    render(mng_format_access_log, empty, sizeof(empty), out, sizeof(out)) == 0
+    render(mon_format_access_log, empty, sizeof(empty), out, sizeof(out)) == 0
   );
 }
 
@@ -207,9 +207,9 @@ static void mock_server(int listenfd, uint8_t auth_status, uint8_t cmd_status) {
 /* parent: drive the real non-blocking client against 127.0.0.1:port */
 static int
 run_client(fd_selector s, unsigned short port, struct client_args *args) {
-  struct mng_client *c = malloc(sizeof(*c));
+  struct mon_client *c = malloc(sizeof(*c));
   assert(c != NULL);
-  mng_client_init(c, args);
+  mon_client_init(c, args);
 
   const int fd = socket(AF_INET, SOCK_STREAM, 0);
   assert(fd >= 0);
@@ -226,7 +226,7 @@ run_client(fd_selector s, unsigned short port, struct client_args *args) {
     _exit(1);
   }
   assert(
-    selector_register(s, fd, mng_client_handler(), OP_WRITE, c) ==
+    selector_register(s, fd, mon_client_handler(), OP_WRITE, c) ==
     SELECTOR_SUCCESS
   );
 
@@ -287,16 +287,16 @@ static void integration_tests(void) {
 
   /* auth ok + command ok -> success */
   run_scenario(
-    s, MON_STATUS_OK, MON_STATUS_OK, CLIENT_CMD_LIST_USERS, MNG_EXIT_OK
+    s, MON_STATUS_OK, MON_STATUS_OK, CLIENT_CMD_LIST_USERS, MON_EXIT_OK
   );
   /* auth rejected -> exit 3 */
   run_scenario(
-    s, MON_STATUS_AUTH_FAIL, 0, CLIENT_CMD_LIST_USERS, MNG_EXIT_AUTH
+    s, MON_STATUS_AUTH_FAIL, 0, CLIENT_CMD_LIST_USERS, MON_EXIT_AUTH
   );
   /* auth ok but command error -> exit 4 */
   run_scenario(
     s, MON_STATUS_OK, MON_STATUS_USER_NOT_FOUND, CLIENT_CMD_DEL_USER,
-    MNG_EXIT_CMD
+    MON_EXIT_CMD
   );
 
   selector_destroy(s);
@@ -310,6 +310,6 @@ int main(void) {
   test_format_users();
   test_format_access_log();
   integration_tests();
-  printf("mng_client: all tests passed\n");
+  printf("mon_client: all tests passed\n");
   return 0;
 }

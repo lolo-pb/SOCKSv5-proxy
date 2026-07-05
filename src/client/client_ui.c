@@ -3,19 +3,19 @@
 #include <limits.h>
 #include <locale.h>
 #include <ncurses.h>
-#include <stdlib.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-#include "ui/intro_animation.h"
-#include "ui/metrics_view.h"
-#include "ui/menu_animation.h"
-#include "ui/ui_mng_session.h"
-#include "ui/users_view.h"
-#include "mng_client.h"
+#include "mon_client.h"
 #include "mon_protocol.h"
+#include "ui/intro_animation.h"
+#include "ui/menu_animation.h"
+#include "ui/metrics_view.h"
+#include "ui/ui_mon_session.h"
+#include "ui/users_view.h"
 
 #define METRICS_REFRESH_MS 1000
 
@@ -31,17 +31,13 @@ static bool is_backspace_key(int ch) {
   return ch == KEY_BACKSPACE || ch == 127 || ch == '\b';
 }
 
-static bool is_up_key(int ch) {
-  return ch == KEY_UP || ch == 'k' || ch == 'K';
-}
+static bool is_up_key(int ch) { return ch == KEY_UP || ch == 'k' || ch == 'K'; }
 
 static bool is_down_key(int ch) {
   return ch == KEY_DOWN || ch == 'j' || ch == 'J';
 }
 
-static bool is_printable_ascii(int ch) {
-  return ch >= 32 && ch <= 126;
-}
+static bool is_printable_ascii(int ch) { return ch >= 32 && ch <= 126; }
 
 static int previous_menu_index(int selected, int item_count) {
   return selected == 0 ? item_count - 1 : selected - 1;
@@ -186,9 +182,8 @@ static void show_text_screen(const char *title, const char *text) {
     getmaxyx(stdscr, rows, cols);
     (void) cols;
     const int body_rows = rows > 4 ? rows - 4 : 1;
-    const int max_offset = text_line_count(text) > body_rows
-                             ? text_line_count(text) - body_rows
-                             : 0;
+    const int max_offset =
+      text_line_count(text) > body_rows ? text_line_count(text) - body_rows : 0;
     if (offset > max_offset) offset = max_offset;
 
     draw_text_screen(title, text, offset);
@@ -218,7 +213,9 @@ static void fetch_and_show(
 ) {
   struct ui_response resp;
   char message[STATUS_LEN];
-  if (!ui_run_command(state, cmd, 0, NULL, NULL, &resp, message, sizeof(message))) {
+  if (!ui_run_command(
+        state, cmd, 0, NULL, NULL, &resp, message, sizeof(message)
+      )) {
     show_message_screen(title, message);
     return;
   }
@@ -234,7 +231,7 @@ static void fetch_and_show(
 }
 
 static void show_live_metrics(const struct ui_state *state) {
-  if (state->mng_fd < 0) {
+  if (state->mon_fd < 0) {
     show_message_screen("Metrics", "not connected");
     return;
   }
@@ -248,9 +245,9 @@ static void show_live_metrics(const struct ui_state *state) {
 
   for (;;) {
     struct metrics_view_data metrics = {0};
-    char *access_log = ui_fetch_access_log_text(state->mng_fd);
+    char *access_log = ui_fetch_access_log_text(state->mon_fd);
     if (access_log == NULL) access_log = ui_copy_text("out of memory");
-    if (!ui_fetch_metrics_data(state->mng_fd, &metrics)) {
+    if (!ui_fetch_metrics_data(state->mon_fd, &metrics)) {
       free(access_log);
       timeout(-1);
       show_message_screen("Metrics", "metrics request failed");
@@ -368,7 +365,7 @@ static void run_main_menu(const struct ui_state *state) {
         run_users_page(state);
       } else if (selected == MAIN_MENU_ACCESS_LOG) {
         fetch_and_show(
-          state, MON_CMD_GET_ACCESS_LOG, "Access Log", mng_format_access_log
+          state, MON_CMD_GET_ACCESS_LOG, "Access Log", mon_format_access_log
         );
       }
       animate_main_menu_box();
@@ -380,9 +377,9 @@ static void run_main_menu(const struct ui_state *state) {
 int client_ui_run(const struct client_args *args) {
   struct ui_state state;
   memset(&state, 0, sizeof(state));
-  state.mng_addr = args->mng_addr;
-  state.mng_port = args->mng_port;
-  state.mng_fd = -1;
+  state.mon_addr = args->mon_addr;
+  state.mon_port = args->mon_port;
+  state.mon_fd = -1;
   if (args->username != NULL && args->password != NULL) {
     strncpy(state.username, args->username, MAX_CREDENTIAL_LEN);
     strncpy(state.password, args->password, MAX_CREDENTIAL_LEN);
@@ -402,14 +399,14 @@ int client_ui_run(const struct client_args *args) {
     if (!ui_authenticate(&state)) state.password[0] = '\0';
   }
   if (!state.authenticated && !run_login(&state)) {
-    if (state.mng_fd >= 0) close(state.mng_fd);
+    if (state.mon_fd >= 0) close(state.mon_fd);
     play_outro();
     endwin();
     return 0;
   }
   run_main_menu(&state);
 
-  if (state.mng_fd >= 0) close(state.mng_fd);
+  if (state.mon_fd >= 0) close(state.mon_fd);
   play_outro();
   endwin();
   return 0;
