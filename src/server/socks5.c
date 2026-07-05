@@ -139,7 +139,7 @@ static void relay_shutdown_write_side(int fd, bool *shutdown_done) {
 }
 
 // Propagates EOF in one direction without closing the whole tunnel.
-static bool relay_should_close(struct socks5 *socks) {
+bool relay_should_close(struct socks5 *socks) {
   const bool client_to_origin_drained = !buffer_can_read(&socks->read_buffer);
   const bool origin_to_client_drained = !buffer_can_read(&socks->write_buffer);
 
@@ -155,7 +155,7 @@ static bool relay_should_close(struct socks5 *socks) {
 }
 
 // Recomputes read/write interests from relay buffer state.
-static void relay_update_interests(struct socks5 *socks, fd_selector selector) {
+void relay_update_interests(struct socks5 *socks, fd_selector selector) {
   fd_interest client_interest = OP_NOOP;
   fd_interest origin_interest = OP_NOOP;
 

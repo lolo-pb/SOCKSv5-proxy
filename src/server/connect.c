@@ -226,25 +226,12 @@ static void origin_read(struct selector_key *key) {
     return;
   }
 
-  if (
-    socks->relay_started && socks->client_eof && socks->origin_eof &&
-    !buffer_can_read(&socks->read_buffer) &&
-    !buffer_can_read(&socks->write_buffer)
-  ) {
+  if (relay_should_close(socks)) {
     socks5_connection_close(socks, key->s);
     return;
   }
 
-  // update interests
-  fd_interest ci = OP_NOOP, oi = OP_NOOP;
-  if (!socks->client_eof && buffer_can_write(&socks->read_buffer))
-    ci |= OP_READ;
-  if (buffer_can_read(&socks->write_buffer)) ci |= OP_WRITE;
-  if (!socks->origin_eof && buffer_can_write(&socks->write_buffer))
-    oi |= OP_READ;
-  if (buffer_can_read(&socks->read_buffer)) oi |= OP_WRITE;
-  selector_set_interest(key->s, socks->client_fd, ci);
-  selector_set_interest(key->s, socks->origin_fd, oi);
+  relay_update_interests(socks, key->s);
 }
 
 // Writes read_buffer to origin (client → origin direction).
@@ -268,24 +255,12 @@ static void origin_write(struct selector_key *key) {
     return;
   }
 
-  if (
-    socks->client_eof && socks->origin_eof &&
-    !buffer_can_read(&socks->read_buffer) &&
-    !buffer_can_read(&socks->write_buffer)
-  ) {
+  if (relay_should_close(socks)) {
     socks5_connection_close(socks, key->s);
     return;
   }
 
-  fd_interest ci = OP_NOOP, oi = OP_NOOP;
-  if (!socks->client_eof && buffer_can_write(&socks->read_buffer))
-    ci |= OP_READ;
-  if (buffer_can_read(&socks->write_buffer)) ci |= OP_WRITE;
-  if (!socks->origin_eof && buffer_can_write(&socks->write_buffer))
-    oi |= OP_READ;
-  if (buffer_can_read(&socks->read_buffer)) oi |= OP_WRITE;
-  selector_set_interest(key->s, socks->client_fd, ci);
-  selector_set_interest(key->s, socks->origin_fd, oi);
+  relay_update_interests(socks, key->s);
 }
 
 static void origin_connect_close(struct selector_key *key) {

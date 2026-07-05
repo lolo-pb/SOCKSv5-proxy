@@ -109,6 +109,9 @@ void socks5_release(struct socks5 *socks);
 void socks5_set_client_fd(struct socks5 *socks, int client_fd);
 void socks5_cancel(struct socks5 *socks);
 void socks5_connection_close(struct socks5 *socks, fd_selector selector);
+
+bool relay_should_close(struct socks5 *socks);
+void relay_update_interests(struct socks5 *socks, fd_selector selector);
 bool socks5_is_relaying(struct socks5 *socks);
 socks5_action
 socks5_relay_client_read(struct socks5 *socks, struct selector_key *key);
