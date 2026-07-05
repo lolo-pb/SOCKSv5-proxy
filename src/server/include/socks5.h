@@ -16,7 +16,6 @@
 #include <stdint.h>
 #include <sys/types.h>
 
-#include "args.h"
 #include "auth.h"
 #include "buffer.h"
 #include "hello.h"
@@ -102,7 +101,6 @@ struct socks5 {
   bool cancelled;
 };
 
-void socks5_set_args(struct socks5args *args);
 void socks5_init(struct socks5 *socks);
 void socks5_ref(struct socks5 *socks);
 void socks5_release(struct socks5 *socks);

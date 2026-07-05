@@ -18,7 +18,6 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-static struct socks5args *socks5_args;
 
 static void hello_read_init(const unsigned state, struct selector_key *key);
 static unsigned hello_read(struct selector_key *key);
@@ -76,7 +75,6 @@ static const struct state_definition socks5_states[] = {
   },
 };
 
-void socks5_set_args(struct socks5args *args) { socks5_args = args; }
 
 void socks5_init(struct socks5 *socks) {
   memset(socks, 0, sizeof(*socks));

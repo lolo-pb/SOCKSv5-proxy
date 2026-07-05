@@ -53,7 +53,6 @@ static void stop_accepting(fd_selector selector, int *server) {
 int main(const int argc, char **argv) {
   struct socks5args args;
   parse_args(argc, argv, &args);
-  socksv5_init(&args);
 
   user_table_init();
   metrics_init();

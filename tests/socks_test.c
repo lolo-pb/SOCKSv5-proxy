@@ -45,11 +45,6 @@ static void drain_write_buffer(struct socks5 *socks) {
 }
 
 static void set_test_args(void) {
-  static struct socks5args args;
-  memset(&args, 0, sizeof(args));
-  args.users[0].name = "alice";
-  args.users[0].pass = "secret";
-  socks5_set_args(&args);
   user_table_init();
   user_table_add("alice", "secret");
 }
