@@ -3,51 +3,20 @@
 #include <limits.h>
 #include <locale.h>
 #include <ncurses.h>
-#include <netdb.h>
-#include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <sys/time.h>
 #include <unistd.h>
 
+#include "ui/intro_animation.h"
 #include "ui/metrics_view.h"
 #include "ui/menu_animation.h"
+#include "ui/ui_mng_session.h"
 #include "mng_client.h"
 #include "mon_protocol.h"
 
-#define AUTH_TIMEOUT_SEC 5
-#define INTRO_ANIMATION_PATH "src/client/ui/open_animation.txt"
-#define MAX_FRAMES 32
-#define MAX_FRAME_SIZE 8192
-#define MAX_CREDENTIAL_LEN 255
-#define STATUS_LEN 128
-#define FRAME_DELAY_MS 150
 #define METRICS_REFRESH_MS 1000
-#define UI_RESPONSE_BUF_LEN (MON_RESPONSE_HEADER_LEN + (1 << 16))
-
-struct ui_response {
-  uint8_t status;
-  uint16_t payload_len;
-  const uint8_t *payload;
-  uint8_t raw[UI_RESPONSE_BUF_LEN];
-};
-
-struct ui_state {
-  const char *mng_addr;
-  unsigned short mng_port;
-  int mng_fd;
-  char username[MAX_CREDENTIAL_LEN + 1];
-  char password[MAX_CREDENTIAL_LEN + 1];
-  char status[STATUS_LEN];
-  bool authenticated;
-};
-
-static int connect_authenticated(
-  const struct ui_state *state, char *message, size_t message_len
-);
 
 static bool is_enter_key(int ch) {
   return ch == '\n' || ch == '\r' || ch == KEY_ENTER;
@@ -79,323 +48,6 @@ static int previous_menu_index(int selected, int item_count) {
 
 static int next_menu_index(int selected, int item_count) {
   return selected == item_count - 1 ? 0 : selected + 1;
-}
-
-static size_t utf8_columns(const char *s, size_t len) {
-  size_t cols = 0;
-  for (size_t i = 0; i < len; i++) {
-    if (((unsigned char) s[i] & 0xC0) != 0x80) cols++;
-  }
-  return cols;
-}
-
-static void draw_frame(const char *frame) {
-  int rows, cols;
-  getmaxyx(stdscr, rows, cols);
-
-  int frame_rows = 0;
-  size_t max_cols = 0;
-  const char *line = frame;
-  while (*line != '\0') {
-    const char *end = strchr(line, '\n');
-    const size_t len = end == NULL ? strlen(line) : (size_t) (end - line);
-    const size_t line_cols = utf8_columns(line, len);
-    if (line_cols > max_cols) max_cols = line_cols;
-    frame_rows++;
-    if (end == NULL) break;
-    line = end + 1;
-  }
-
-  const int start_y = frame_rows < rows ? (rows - frame_rows) / 2 : 0;
-  const int start_x = (int) max_cols < cols ? (cols - (int) max_cols) / 2 : 0;
-
-  erase();
-  line = frame;
-  for (int y = start_y; *line != '\0' && y < rows; y++) {
-    const char *end = strchr(line, '\n');
-    const int len = end == NULL ? (int) strlen(line) : (int) (end - line);
-    mvaddnstr(y, start_x, line, len);
-    if (end == NULL) break;
-    line = end + 1;
-  }
-  refresh();
-}
-
-static int load_frames(char frames[MAX_FRAMES][MAX_FRAME_SIZE]) {
-  FILE *f = fopen(INTRO_ANIMATION_PATH, "r");
-  if (f == NULL) return -1;
-
-  int frame_count = 0;
-  size_t offset = 0;
-  char line[1024];
-  while (fgets(line, sizeof(line), f) != NULL && frame_count < MAX_FRAMES) {
-    if (strcmp(line, "#\n") == 0 || strcmp(line, "#\r\n") == 0) {
-      frames[frame_count][offset] = '\0';
-      frame_count++;
-      offset = 0;
-      continue;
-    }
-
-    const size_t len = strlen(line);
-    if (offset + len + 1 >= MAX_FRAME_SIZE) continue;
-    memcpy(frames[frame_count] + offset, line, len);
-    offset += len;
-  }
-
-  if (offset > 0 && frame_count < MAX_FRAMES) {
-    frames[frame_count][offset] = '\0';
-    frame_count++;
-  }
-
-  fclose(f);
-  return frame_count;
-}
-
-static void play_intro_animation(bool reverse) {
-  char frames[MAX_FRAMES][MAX_FRAME_SIZE];
-  const int frame_count = load_frames(frames);
-  if (frame_count <= 0) {
-    erase();
-    mvaddstr(0, 0, "client: could not load intro animation");
-    refresh();
-    napms(1000);
-    return;
-  }
-
-  nodelay(stdscr, TRUE);
-  if (reverse) {
-    for (int i = 0; i < frame_count; i++) {
-      if (getch() != ERR) break;
-      draw_frame(frames[i]);
-      napms(FRAME_DELAY_MS);
-    }
-  } else {
-    for (int i = frame_count - 1; i >= 0; i--) {
-      if (getch() != ERR) break;
-      draw_frame(frames[i]);
-      napms(FRAME_DELAY_MS);
-    }
-  }
-  nodelay(stdscr, FALSE);
-  napms(250);
-}
-
-static void play_intro(void) { play_intro_animation(false); }
-
-static void play_outro(void) { play_intro_animation(true); }
-
-static const char *mon_status_message(uint8_t status) {
-  switch (status) {
-    case MON_STATUS_OK:
-      return "ok";
-    case MON_STATUS_AUTH_FAIL:
-      return "authentication failed";
-    case MON_STATUS_UNKNOWN_CMD:
-      return "unknown command";
-    case MON_STATUS_USER_EXISTS:
-      return "user already exists";
-    case MON_STATUS_USER_NOT_FOUND:
-      return "user not found";
-    case MON_STATUS_INTERNAL_ERROR:
-      return "server error";
-    default:
-      return "unexpected server response";
-  }
-}
-
-static bool
-fill_arg(struct mon_request *req, unsigned idx, const char *s) {
-  const size_t len = strlen(s);
-  if (len > MON_MAX_ARG_LEN) return false;
-  req->arg_lens[idx] = (uint8_t) len;
-  memcpy(req->args[idx], s, len);
-  req->args[idx][len] = '\0';
-  return true;
-}
-
-static bool encode_request(
-  uint8_t cmd, unsigned nargs, const char *arg0, const char *arg1, uint8_t *buf,
-  size_t buf_len, int *request_len
-) {
-  struct mon_request req;
-  memset(&req, 0, sizeof(req));
-  req.version = MON_VERSION;
-  req.cmd = cmd;
-  req.nargs = (uint8_t) nargs;
-
-  if (nargs > 0 && !fill_arg(&req, 0, arg0)) return false;
-  if (nargs > 1 && !fill_arg(&req, 1, arg1)) return false;
-
-  *request_len = mon_request_encode(&req, buf, buf_len);
-  return *request_len > 0;
-}
-
-static bool build_auth_request(
-  const struct ui_state *state, uint8_t *buf, size_t buf_len, int *request_len
-) {
-  return encode_request(
-    MON_CMD_AUTH, 2, state->username, state->password, buf, buf_len, request_len
-  );
-}
-
-static bool send_all(int fd, const uint8_t *buf, size_t len) {
-  size_t sent = 0;
-  while (sent < len) {
-    const ssize_t n = send(fd, buf + sent, len - sent, MSG_NOSIGNAL);
-    if (n <= 0) return false;
-    sent += (size_t) n;
-  }
-  return true;
-}
-
-static bool recv_response(int fd, struct ui_response *out) {
-  size_t used = 0;
-
-  while (used < sizeof(out->raw)) {
-    const ssize_t n = recv(fd, out->raw + used, sizeof(out->raw) - used, 0);
-    if (n <= 0) return false;
-    used += (size_t) n;
-
-    struct mon_response resp;
-    size_t consumed;
-    switch (mon_response_decode(out->raw, used, &resp, &consumed)) {
-      case MON_DECODE_NEED_MORE:
-        break;
-      case MON_DECODE_ERROR:
-        return false;
-      case MON_DECODE_OK:
-        out->status = resp.status;
-        out->payload_len = resp.payload_len;
-        out->payload = resp.payload;
-        return true;
-    }
-  }
-  return false;
-}
-
-static bool send_command_on_fd(
-  int fd, uint8_t cmd, unsigned nargs, const char *arg0, const char *arg1,
-  struct ui_response *out
-) {
-  uint8_t request[3 + MON_MAX_ARGS * (1 + MON_MAX_ARG_LEN)];
-  int request_len = 0;
-  return encode_request(
-           cmd, nargs, arg0, arg1, request, sizeof(request), &request_len
-         ) &&
-         send_all(fd, request, (size_t) request_len) && recv_response(fd, out);
-}
-
-static uint64_t ui_be_u64(const uint8_t *p) {
-  uint64_t v = 0;
-  for (int i = 0; i < 8; i++) v = (v << 8) | p[i];
-  return v;
-}
-
-static bool authenticate(struct ui_state *state) {
-  if (state->mng_fd >= 0) {
-    close(state->mng_fd);
-    state->mng_fd = -1;
-  }
-
-  state->mng_fd =
-    connect_authenticated(state, state->status, sizeof(state->status));
-  if (state->mng_fd >= 0)
-    snprintf(state->status, sizeof(state->status), "%s", mon_status_message(MON_STATUS_OK));
-  state->authenticated = state->mng_fd >= 0;
-  return state->authenticated;
-}
-
-static bool run_command(
-  const struct ui_state *state, uint8_t cmd, unsigned nargs, const char *arg0,
-  const char *arg1, struct ui_response *out, char *message, size_t message_len
-) {
-  if (state->mng_fd < 0) {
-    snprintf(message, message_len, "not connected");
-    return false;
-  }
-
-  if (!send_command_on_fd(state->mng_fd, cmd, nargs, arg0, arg1, out)) {
-    snprintf(message, message_len, "command request failed");
-    return false;
-  }
-
-  snprintf(message, message_len, "%s", mon_status_message(out->status));
-  return out->status == MON_STATUS_OK;
-}
-
-static int connect_authenticated_at_addr(
-  const struct ui_state *state, const struct addrinfo *rp, char *message,
-  size_t message_len
-) {
-  const int fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-  if (fd < 0) return -1;
-
-  const struct timeval timeout = {.tv_sec = AUTH_TIMEOUT_SEC, .tv_usec = 0};
-  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-  setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-
-  if (connect(fd, rp->ai_addr, rp->ai_addrlen) < 0) {
-    close(fd);
-    return -1;
-  }
-
-  uint8_t request[3 + MON_MAX_ARGS * (1 + MON_MAX_ARG_LEN)];
-  int request_len = 0;
-  struct ui_response auth_resp;
-  if (!build_auth_request(state, request, sizeof(request), &request_len) ||
-      !send_all(fd, request, (size_t) request_len) ||
-      !recv_response(fd, &auth_resp)) {
-    close(fd);
-    snprintf(message, message_len, "authentication request failed");
-    return -2;
-  }
-
-  if (auth_resp.status != MON_STATUS_OK) {
-    close(fd);
-    snprintf(message, message_len, "%s", mon_status_message(auth_resp.status));
-    return -2;
-  }
-
-  return fd;
-}
-
-static int connect_authenticated(
-  const struct ui_state *state, char *message, size_t message_len
-) {
-  char port[6];
-  snprintf(port, sizeof(port), "%u", state->mng_port);
-
-  struct addrinfo hints;
-  memset(&hints, 0, sizeof(hints));
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-
-  struct addrinfo *res = NULL;
-  const int gai = getaddrinfo(state->mng_addr, port, &hints, &res);
-  if (gai != 0) {
-    snprintf(message, message_len, "cannot resolve %s:%s", state->mng_addr, port);
-    return -1;
-  }
-
-  bool reached = false;
-  int fd = -1;
-  for (const struct addrinfo *rp = res; rp != NULL; rp = rp->ai_next) {
-    fd = connect_authenticated_at_addr(state, rp, message, message_len);
-    if (fd >= 0) {
-      reached = true;
-      break;
-    }
-    if (fd == -2) {
-      reached = true;
-      break;
-    }
-  }
-  freeaddrinfo(res);
-
-  if (!reached)
-    snprintf(message, message_len, "could not connect to %s:%s", state->mng_addr, port);
-
-  return fd;
 }
 
 static void draw_login_form(const struct ui_state *state, int field) {
@@ -466,7 +118,7 @@ static bool run_login(struct ui_state *state) {
       } else if (state->username[0] != '\0' && state->password[0] != '\0') {
         snprintf(state->status, sizeof(state->status), "authenticating...");
         draw_login_form(state, field);
-        if (authenticate(state)) return true;
+        if (ui_authenticate(state)) return true;
       }
       continue;
     }
@@ -478,25 +130,6 @@ static bool run_login(struct ui_state *state) {
       append_char(field == 0 ? state->username : state->password, ch);
     }
   }
-}
-
-typedef int (*payload_formatter)(const uint8_t *payload, size_t len, FILE *out);
-
-static char *
-format_payload(const struct ui_response *resp, payload_formatter formatter) {
-  char *text = NULL;
-  size_t len = 0;
-  FILE *out = open_memstream(&text, &len);
-  if (out == NULL) return NULL;
-
-  if (formatter(resp->payload, resp->payload_len, out) != 0) {
-    fclose(out);
-    free(text);
-    return NULL;
-  }
-
-  fclose(out);
-  return text;
 }
 
 static int text_line_count(const char *text) {
@@ -584,12 +217,12 @@ static void fetch_and_show(
 ) {
   struct ui_response resp;
   char message[STATUS_LEN];
-  if (!run_command(state, cmd, 0, NULL, NULL, &resp, message, sizeof(message))) {
+  if (!ui_run_command(state, cmd, 0, NULL, NULL, &resp, message, sizeof(message))) {
     show_message_screen(title, message);
     return;
   }
 
-  char *text = format_payload(&resp, formatter);
+  char *text = ui_format_payload(&resp, formatter);
   if (text == NULL) {
     show_message_screen(title, "Malformed server response");
     return;
@@ -597,40 +230,6 @@ static void fetch_and_show(
 
   show_text_screen(title, text);
   free(text);
-}
-
-static char *copy_text(const char *text) {
-  const size_t len = strlen(text);
-  char *copy = malloc(len + 1);
-  if (copy == NULL) return NULL;
-  memcpy(copy, text, len + 1);
-  return copy;
-}
-
-static bool fetch_metrics_data(int fd, struct metrics_view_data *metrics) {
-  struct ui_response resp;
-  if (!send_command_on_fd(fd, MON_CMD_GET_METRICS, 0, NULL, NULL, &resp))
-    return false;
-  if (resp.status != MON_STATUS_OK)
-    return false;
-  if (resp.payload_len != MON_METRICS_PAYLOAD_LEN) return false;
-
-  metrics->historic_connections = ui_be_u64(resp.payload);
-  metrics->current_connections = ui_be_u64(resp.payload + 8);
-  metrics->bytes_transferred = ui_be_u64(resp.payload + 16);
-  return true;
-}
-
-static char *fetch_access_log_text(int fd) {
-  struct ui_response resp;
-  if (!send_command_on_fd(fd, MON_CMD_GET_ACCESS_LOG, 0, NULL, NULL, &resp))
-    return copy_text("access log request failed");
-  if (resp.status != MON_STATUS_OK)
-    return copy_text(mon_status_message(resp.status));
-
-  char *text = format_payload(&resp, mng_format_access_log);
-  if (text == NULL) return copy_text("Malformed access log response");
-  return text;
 }
 
 static void show_live_metrics(const struct ui_state *state) {
@@ -648,9 +247,9 @@ static void show_live_metrics(const struct ui_state *state) {
 
   for (;;) {
     struct metrics_view_data metrics = {0};
-    char *access_log = fetch_access_log_text(state->mng_fd);
-    if (access_log == NULL) access_log = copy_text("out of memory");
-    if (!fetch_metrics_data(state->mng_fd, &metrics)) {
+    char *access_log = ui_fetch_access_log_text(state->mng_fd);
+    if (access_log == NULL) access_log = ui_copy_text("out of memory");
+    if (!ui_fetch_metrics_data(state->mng_fd, &metrics)) {
       free(access_log);
       timeout(-1);
       show_message_screen("Metrics", "metrics request failed");
@@ -752,7 +351,7 @@ static void user_command(
   struct ui_response resp;
   char message[STATUS_LEN];
   unsigned nargs = cmd == MON_CMD_ADD_USER ? 2 : 1;
-  run_command(state, cmd, nargs, user, pass, &resp, message, sizeof(message));
+  ui_run_command(state, cmd, nargs, user, pass, &resp, message, sizeof(message));
   show_message_screen("Users", message);
 }
 
@@ -951,7 +550,7 @@ int client_ui_run(const struct client_args *args) {
   play_intro();
   if (state.username[0] != '\0' && state.password[0] != '\0') {
     snprintf(state.status, sizeof(state.status), "authenticating...");
-    if (!authenticate(&state)) state.password[0] = '\0';
+    if (!ui_authenticate(&state)) state.password[0] = '\0';
   }
   if (!state.authenticated && !run_login(&state)) {
     if (state.mng_fd >= 0) close(state.mng_fd);
