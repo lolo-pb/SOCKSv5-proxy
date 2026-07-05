@@ -11,6 +11,8 @@
 
 // Include implementation files so static SOCKS internals can be tested.
 #include "../src/server/auth.c"
+#include "../src/server/connect.c"
+#include "../src/server/dns_resolver.c"
 #include "../src/server/hello.c"
 #include "../src/server/request.c"
 #include "../src/server/socks5.c"
