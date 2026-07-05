@@ -14,7 +14,7 @@ OBJECTS_FOLDER=./obj
 SERVER_OUTPUT_FILE=$(OUTPUT_FOLDER)/server
 CLIENT_OUTPUT_FILE=$(OUTPUT_FOLDER)/client
 SOCKS_TEST_OUTPUT_FILE=$(OUTPUT_FOLDER)/socks_test
-CHECK_LIBS=-lcheck -lrt -lm
+CHECK_LIBS=$(shell pkg-config --libs check) -lrt -lm
 
 all: client server
 server: $(SERVER_OUTPUT_FILE)
@@ -24,7 +24,7 @@ test: $(SOCKS_TEST_OUTPUT_FILE)
 
 $(SOCKS_TEST_OUTPUT_FILE): tests/socks_test.c
 	mkdir -p $(OUTPUT_FOLDER)
-	$(COMPILER) $(COMPILER_FLAGS) -I src/shared/include -I src/server/include $< src/server/metrics.c src/server/user_table.c src/server/access_log.c -o $@ $(CHECK_LIBS) $(LD_FLAGS)
+	$(COMPILER) $(COMPILER_FLAGS) -I src/shared/include -I src/server/include $< -o $@ $(CHECK_LIBS) $(LD_FLAGS)
 
 $(SERVER_OUTPUT_FILE): $(SERVER_OBJECTS) $(SHARED_OBJECTS)
 	mkdir -p $(OUTPUT_FOLDER)
