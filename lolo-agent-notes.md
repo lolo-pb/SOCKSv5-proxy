@@ -208,12 +208,13 @@ These open the ncurses UI path.
 Parses CLI args. If no command is selected, the caller enters interactive UI
 mode. One-shot commands still require `-u user:pass`.
 
-`src/client/mng_client.c`
+`src/client/mon_client.c`
 Selector-based one-shot management client. It connects, sends auth, sends one
 command, formats the response to stdout, and exits.
 
 `src/client/client_ui.c`
-ncurses UI. Current flow:
+ncurses UI shell. It owns login, intro/outro animations, and the main menu.
+Screen-specific drawing lives under `src/client/ui/`.
 
 ```text
 start client with no command
@@ -228,8 +229,25 @@ start client with no command
 ```
 
 `src/client/ui/`
-Assets and UI helpers for the ncurses client. This includes the intro frames,
-menu transition animation, and the live metrics view.
+Assets and UI helpers for the ncurses client.
+
+Important pieces:
+
+- `ui_mon_session.c`: shared authenticated monitoring connection helpers.
+- `metrics_view.c`: live metrics drawing.
+- `users_view.c`: user list/details page.
+- `access_log_view.c`: access log scroll page.
+- `intro_animation.c` and `menu_animation.c`: UI animations.
+- `*.txt`: ASCII/Unicode assets used by the UI.
+
+UI requests to the server:
+
+- login sends `MON_CMD_AUTH`
+- metrics sends `MON_CMD_GET_METRICS`
+- users page sends `MON_CMD_LIST_USERS`
+- users page add/delete sends `MON_CMD_ADD_USER` / `MON_CMD_DEL_USER`
+- users page also reads `MON_CMD_GET_ACCESS_LOG` to show last connection per user
+- access log page sends `MON_CMD_GET_ACCESS_LOG`, and refreshes it on demand
 
 `src/client/ui/open_animation.txt`
 ASCII/Unicode animation frames. Frames are separated by lines containing only:
