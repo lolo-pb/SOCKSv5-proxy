@@ -1,6 +1,16 @@
 #ifndef HELLO_H
 #define HELLO_H
 
+/**
+ * hello.h - SOCKSv5 method negotiation parser (RFC 1928 section 3).
+ *
+ *   +----+----------+----------+
+ *   |VER | NMETHODS | METHODS  |
+ *   +----+----------+----------+
+ *   | 1  |    1     | 1 to 255 |
+ *   +----+----------+----------+
+ */
+
 #include <stdbool.h>
 #include <stdint.h>
 

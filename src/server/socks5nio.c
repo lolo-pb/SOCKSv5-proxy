@@ -31,7 +31,6 @@ static const struct fd_handler socksv5_handler = {
   .handle_close = socksv5_close,
 };
 
-void socksv5_init(struct socks5args *args) { socks5_set_args(args); }
 
 void socksv5_passive_accept(struct selector_key *key) {
   struct sockaddr_storage client_addr;
