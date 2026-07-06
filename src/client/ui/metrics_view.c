@@ -226,13 +226,15 @@ static void draw_counters(
       top + 1, x, "Historic connections: %" PRIu64,
       metrics->historic_connections
     );
-  if (top + 3 <= last_content_row) draw_bar_row(top + 3, x, row_width, "Bytes", bytes);
-  if (top + 4 <= last_content_row)
-    draw_bar_row(top + 4, x, row_width, "KiloBytes", kilobytes);
+  if (top + 2 <= last_content_row)
+    mvprintw(top + 2, x, "Total bytes sent:    %" PRIu64, bytes);
+  if (top + 4 <= last_content_row) draw_bar_row(top + 4, x, row_width, "Bytes", bytes);
   if (top + 5 <= last_content_row)
-    draw_bar_row(top + 5, x, row_width, "MegaBytes", megabytes);
+    draw_bar_row(top + 5, x, row_width, "KiloBytes", kilobytes);
   if (top + 6 <= last_content_row)
-    draw_bar_row(top + 6, x, row_width, "GigaBytes", gigabytes);
+    draw_bar_row(top + 6, x, row_width, "MegaBytes", megabytes);
+  if (top + 7 <= last_content_row)
+    draw_bar_row(top + 7, x, row_width, "GigaBytes", gigabytes);
 }
 
 void draw_metrics_view(
