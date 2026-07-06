@@ -16,6 +16,8 @@
 #define USERS_SKULL_MAX_ROWS 10
 #define USERS_SKULL_MAX_COLS 24
 #define USERS_DETAIL_LEN 128
+#define USERS_DETAIL_BOX_WIDTH 39
+#define USERS_MIN_LIST_WIDTH 18
 
 struct users_page_data {
   char names[USERS_MAX_COUNT][MAX_CREDENTIAL_LEN + 1];
@@ -492,16 +494,18 @@ static void draw_user_detail_box(
     skull->count > 0 ? measure_frame(skull->frames[0])
                      : (struct frame_size){.rows = 7, .cols = 16};
   const int skull_rows = skull_size.rows;
-  const int skull_area_width = skull_size.cols + 4;
+  const int skull_area_width = skull_size.cols + 2;
   const int box_height = skull_rows + 2;
-  const int details_width = skull_area_width * 2;
-  const int box_width = skull_area_width + details_width + 3;
-  if (right_width < box_width + 2 || page_height < box_height + 7) {
+  const int box_width = USERS_DETAIL_BOX_WIDTH;
+  const int details_width = box_width - skull_area_width - 3;
+  if (right_width < box_width || page_height < box_height + 1 ||
+      details_width < 11) {
     mvaddstr(1, right_left + 1, "terminal too small");
     return;
   }
 
-  const int top = page_height > box_height ? (page_height - box_height) / 2 : 1;
+  const int top =
+    page_height > box_height + 1 ? (page_height - box_height - 1) / 2 : 0;
   const int left = right_left + (right_width - box_width) / 2;
   draw_ui_box(top, left, box_height, box_width);
 
@@ -534,7 +538,7 @@ static void draw_user_detail_box(
   mvaddnstr(inner_top + 3, details_left, "last connect", details_width);
   mvaddnstr(inner_top + 4, details_left, last_connection, details_width);
 
-  mvaddnstr(top + box_height + 1, left + 1, "[x] Delete user", right_width - 2);
+  mvaddnstr(top + box_height, left + 1, "[x]Terminate user", box_width - 2);
 }
 
 static void draw_users_page(
@@ -545,7 +549,7 @@ static void draw_users_page(
   getmaxyx(stdscr, rows, cols);
 
   erase();
-  if (rows < 21 || cols < 88) {
+  if (rows < 12 || cols < USERS_MIN_LIST_WIDTH + USERS_DETAIL_BOX_WIDTH + 2) {
     mvaddstr(0, 0, "terminal too small");
     refresh();
     return;
@@ -553,7 +557,9 @@ static void draw_users_page(
 
   const int page_height = rows - 1;
   const int page_width = cols;
-  const int left_width = cols / 3;
+  int left_width = cols - USERS_DETAIL_BOX_WIDTH - 2;
+  if (left_width > cols / 3) left_width = cols / 3;
+  if (left_width < USERS_MIN_LIST_WIDTH) left_width = USERS_MIN_LIST_WIDTH;
 
   draw_ui_box(0, 0, page_height, page_width);
   draw_users_list(users, selected, scroll, page_height, left_width);
@@ -566,7 +572,7 @@ static void draw_users_page(
   else
     mvaddnstr(
       rows - 1, 0,
-      "Up/Down: scroll users    a: add user    x: delete user    b/Esc: back",
+      "Up/Down: scroll users    a: add user    x: terminate user    b/Esc: back",
       cols - 1
     );
   refresh();
