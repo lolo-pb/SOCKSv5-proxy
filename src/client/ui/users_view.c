@@ -23,6 +23,7 @@ struct users_page_data {
   char names[USERS_MAX_COUNT][MAX_CREDENTIAL_LEN + 1];
   char passwords[USERS_MAX_COUNT][MAX_CREDENTIAL_LEN + 1];
   char last_connections[USERS_MAX_COUNT][USERS_DETAIL_LEN];
+  char last_destinations[USERS_MAX_COUNT][USERS_DETAIL_LEN];
   int count;
 };
 
@@ -189,6 +190,7 @@ static bool parse_user_payload(
       users->last_connections[users->count],
       sizeof(users->last_connections[users->count]), "%s", "(none)"
     );
+    users->last_destinations[users->count][0] = '\0';
     users->count++;
     off += name_len;
   }
@@ -330,13 +332,17 @@ static bool fetch_user_last_connections(
       const time_t t = (time_t) ts;
       struct tm tm;
       if (gmtime_r(&t, &tm) != NULL) {
-        strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%SZ", &tm);
+        strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S", &tm);
       } else {
         snprintf(tbuf, sizeof(tbuf), "%llu", (unsigned long long) ts);
       }
       snprintf(
         users->last_connections[j], sizeof(users->last_connections[j]),
-        "%s  %.*s:%u", tbuf, (int) addr_len, addr, port
+        "%s", tbuf
+      );
+      snprintf(
+        users->last_destinations[j], sizeof(users->last_destinations[j]),
+        "%.*s:%u", (int) addr_len, addr, port
       );
     }
   }
@@ -523,6 +529,11 @@ static void draw_user_detail_box(
   const char *last_connection =
     users->count > 0 && selected >= 0 ? users->last_connections[selected]
                                       : "(none)";
+  const char *last_destination =
+    users->count > 0 && selected >= 0 &&
+        users->last_destinations[selected][0] != '\0'
+      ? users->last_destinations[selected]
+      : "";
 
   if (skull->count > 0)
     draw_skull_frame(
@@ -531,12 +542,13 @@ static void draw_user_detail_box(
     );
 
   mvvline(inner_top, divider, '|', inner_height);
-  mvprintw(inner_top, details_left, "name    : ");
+  mvprintw(inner_top, details_left, "Name    : ");
   addnstr(name, details_width - 10);
-  mvprintw(inner_top + 1, details_left, "password: ");
+  mvprintw(inner_top + 1, details_left, "Password: ");
   addnstr(password, details_width - 10);
-  mvaddnstr(inner_top + 3, details_left, "last connect", details_width);
+  mvaddnstr(inner_top + 3, details_left, "Last connect:", details_width);
   mvaddnstr(inner_top + 4, details_left, last_connection, details_width);
+  mvaddnstr(inner_top + 5, details_left, last_destination, details_width);
 
   mvaddnstr(top + box_height, left + 1, "[x]Terminate user", box_width - 2);
 }
