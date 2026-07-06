@@ -14,7 +14,7 @@ OBJECTS_FOLDER=./obj
 SERVER_OUTPUT_FILE=$(OUTPUT_FOLDER)/server
 CLIENT_OUTPUT_FILE=$(OUTPUT_FOLDER)/client
 SOCKS_TEST_OUTPUT_FILE=$(OUTPUT_FOLDER)/socks_test
-CHECK_LIBS=-lcheck -lsubunit -lrt -lm
+CHECK_LIBS=$(shell pkg-config --libs check) -lrt -lm
 
 all: client server
 server: $(SERVER_OUTPUT_FILE)

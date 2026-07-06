@@ -53,20 +53,19 @@ static void stop_accepting(fd_selector selector, int *server) {
 int main(const int argc, char **argv) {
   struct socks5args args;
   parse_args(argc, argv, &args);
-  socksv5_init(&args);
 
   user_table_init();
   metrics_init();
   access_log_init();
 
-  // load initial users from args into user_table
+  // load initial users from args
   for (unsigned i = 0; i < MAX_USERS; i++) {
     if (args.users[i].name != NULL) {
       user_table_add(args.users[i].name, args.users[i].pass);
     }
   }
 
-  // no tenemos nada que leer de stdin
+  // nothing to read from stdin
   close(0);
 
   const char *err_msg = NULL;
@@ -98,7 +97,7 @@ int main(const int argc, char **argv) {
 
   fprintf(stdout, "Listening on TCP %s:%d\n", args.socks_addr, args.socks_port);
 
-  // man 7 ip. no importa reportar nada si falla.
+
   setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int));
 
   if (bind(server, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
@@ -111,8 +110,8 @@ int main(const int argc, char **argv) {
     goto finally;
   }
 
-  // registrar sigterm es útil para terminar el programa normalmente.
-  // esto ayuda mucho en herramientas como valgrind.
+  // signal handling for graceful shutdown
+
   struct sigaction shutdown_action = {
     .sa_handler = sigterm_handler,
   };
@@ -148,10 +147,10 @@ int main(const int argc, char **argv) {
     goto finally;
   }
   const struct fd_handler socksv5 = {
-    // aca va la salsa del socks5nio.c
+
     .handle_read = socksv5_passive_accept,
     .handle_write = NULL,
-    .handle_close = NULL,// nada que liberar
+    .handle_close = NULL,
   };
   ss = selector_register(selector, server, &socksv5, OP_READ, NULL);
   if (ss != SELECTOR_SUCCESS) {

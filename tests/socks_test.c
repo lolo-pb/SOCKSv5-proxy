@@ -10,10 +10,15 @@
 #include <unistd.h>
 
 // Include implementation files so static SOCKS internals can be tested.
+#include "../src/server/access_log.c"
 #include "../src/server/auth.c"
+#include "../src/server/connect.c"
+#include "../src/server/dns_resolver.c"
 #include "../src/server/hello.c"
+#include "../src/server/metrics.c"
 #include "../src/server/request.c"
 #include "../src/server/socks5.c"
+#include "../src/server/user_table.c"
 #include "../src/shared/buffer.c"
 #include "../src/shared/selector.c"
 #include "../src/shared/stm.c"
@@ -40,11 +45,8 @@ static void drain_write_buffer(struct socks5 *socks) {
 }
 
 static void set_test_args(void) {
-  static struct socks5args args;
-  memset(&args, 0, sizeof(args));
-  args.users[0].name = "alice";
-  args.users[0].pass = "secret";
-  socks5_set_args(&args);
+  user_table_init();
+  user_table_add("alice", "secret");
 }
 
 static void init_selector_for_test(void) {
@@ -533,7 +535,7 @@ START_TEST(test_domain_dns_worker_stores_resolution_result) {
     .fd = socks.client_fd,
     .data = &socks,
   };
-  ck_assert_int_eq(EINPROGRESS, start_domain_connect(&socks, &key));
+  ck_assert_int_eq(EINPROGRESS, dns_resolve_start(&socks, &key));
 
   bool done = false;
   for (int i = 0; i < 200 && !done; i++) {

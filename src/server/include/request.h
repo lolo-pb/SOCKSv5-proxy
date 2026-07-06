@@ -1,6 +1,16 @@
 #ifndef REQUEST_H
 #define REQUEST_H
 
+/**
+ * request.h - SOCKSv5 CONNECT request parser (RFC 1928 section 4).
+ *
+ *   +----+-----+-------+------+----------+----------+
+ *   |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
+ *   +----+-----+-------+------+----------+----------+
+ *   | 1  |  1  | X'00' |  1   | Variable |    2     |
+ *   +----+-----+-------+------+----------+----------+
+ */
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <sys/socket.h>
