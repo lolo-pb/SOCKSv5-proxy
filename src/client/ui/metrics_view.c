@@ -37,7 +37,41 @@ void metrics_graph_record(struct metrics_graph *graph, uint64_t current_connecti
     );
     graph->values[METRICS_GRAPH_MAX_POINTS - 1] = current_connections;
   }
-  graph->next_time_sec += 2;
+  graph->next_time_sec += 1;
+}
+
+static void graph_y_bounds(
+  const struct metrics_graph *graph, unsigned first, unsigned visible,
+  int plot_height, uint64_t *y_min, uint64_t *y_max
+) {
+  uint64_t min = graph->values[first];
+  uint64_t max = min;
+  for (unsigned i = 1; i < visible; i++) {
+    const uint64_t value = graph->values[first + i];
+    if (value < min) min = value;
+    if (value > max) max = value;
+  }
+
+  const uint64_t span = (uint64_t) plot_height;
+  if (min == max) {
+    *y_min = min >= span / 2 ? min - span / 2 : 0;
+    *y_max = *y_min + span - 1;
+    return;
+  }
+
+  const uint64_t padding = (max - min) / 10 + 1;
+  *y_min = min > padding ? min - padding : 0;
+  *y_max = max + padding;
+  if (*y_max <= *y_min) *y_max = *y_min + 1;
+}
+
+static int graph_y_for_value(
+  uint64_t value, uint64_t y_min, uint64_t y_max, int plot_top, int plot_height
+) {
+  const uint64_t range = y_max - y_min;
+  const uint64_t offset = y_max - value;
+  return plot_top +
+         (int) ((offset * (uint64_t) (plot_height - 1) + range / 2) / range);
 }
 
 static int line_count(const char *text) {
@@ -136,13 +170,26 @@ static void draw_graph_space(
     return;
   }
 
-  const uint64_t y_span = (uint64_t) plot_height;
-  const uint64_t y_min =
-    current_connections >= y_span ? current_connections - y_span + 1 : 0;
-  const uint64_t y_max = y_min + y_span - 1;
+  const unsigned visible =
+    graph != NULL && graph->count < (unsigned) plot_width
+      ? graph->count
+      : (unsigned) plot_width;
+  const unsigned first = graph != NULL ? graph->count - visible : 0;
+
+  uint64_t y_min;
+  uint64_t y_max;
+  if (graph != NULL && visible > 0) {
+    graph_y_bounds(graph, first, visible, plot_height, &y_min, &y_max);
+  } else {
+    const uint64_t y_span = (uint64_t) plot_height;
+    y_min = current_connections >= y_span ? current_connections - y_span + 1 : 0;
+    y_max = y_min + y_span - 1;
+  }
+  const uint64_t y_range = y_max - y_min;
 
   for (int row = 0; row < plot_height; row++) {
-    const uint64_t y_value = y_max - (uint64_t) row;
+    const uint64_t y_value =
+      y_max - ((uint64_t) row * y_range) / (uint64_t) (plot_height - 1);
     mvprintw(plot_top + row, left + 1, "%4" PRIu64 "|", y_value);
   }
 
@@ -152,19 +199,14 @@ static void draw_graph_space(
   if (axis_y + 1 < rows - 1) mvaddstr(axis_y + 1, left + 1, "time");
 
   if (graph == NULL || graph->count == 0) return;
-
-  const unsigned visible = graph->count < (unsigned) plot_width
-                             ? graph->count
-                             : (unsigned) plot_width;
-  const unsigned first = graph->count - visible;
-  const unsigned first_time = graph->next_time_sec - graph->count * 2;
+  const unsigned first_time = graph->next_time_sec - graph->count;
 
   for (unsigned i = 0; i < visible; i++) {
     const uint64_t value = graph->values[first + i];
     if (value < y_min || value > y_max) continue;
 
     const int x = plot_left + plot_width - (int) visible + (int) i;
-    const int y = plot_top + (int) (y_max - value);
+    const int y = graph_y_for_value(value, y_min, y_max, plot_top, plot_height);
     attron(COLOR_PAIR(METRICS_COLOR_GRAPH_POINT));
     mvaddch(y, x, '*');
     attroff(COLOR_PAIR(METRICS_COLOR_GRAPH_POINT));
@@ -173,7 +215,7 @@ static void draw_graph_space(
   if (axis_y + 1 >= rows - 1) return;
 
   for (unsigned i = 0; i < visible; i++) {
-    const unsigned sample_time = first_time + (first + i) * 2;
+    const unsigned sample_time = first_time + first + i;
     if (sample_time % 10 != 0) continue;
 
     const int x = plot_left + plot_width - (int) visible + (int) i;

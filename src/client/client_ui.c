@@ -16,7 +16,7 @@
 #include "ui/ui_mon_session.h"
 #include "ui/users_view.h"
 
-#define METRICS_REFRESH_MS 1000
+#define METRICS_REFRESH_MS 500
 
 static bool is_enter_key(int ch) {
   return ch == '\n' || ch == '\r' || ch == KEY_ENTER;
@@ -215,7 +215,6 @@ static void show_live_metrics(const struct ui_state *state) {
   keypad(stdscr, TRUE);
   timeout(METRICS_REFRESH_MS);
   const int access_log_offset = INT_MAX;
-  unsigned metrics_updates = 0;
   struct metrics_graph graph;
   metrics_graph_init(&graph);
 
@@ -230,9 +229,7 @@ static void show_live_metrics(const struct ui_state *state) {
       return;
     }
 
-    metrics_updates++;
-    if (metrics_updates % 2 == 0)
-      metrics_graph_record(&graph, metrics.current_connections);
+    metrics_graph_record(&graph, metrics.current_connections);
 
     draw_metrics_view(
       &metrics, access_log != NULL ? access_log : "", access_log_offset, &graph

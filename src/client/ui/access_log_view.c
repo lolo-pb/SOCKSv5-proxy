@@ -179,6 +179,19 @@ static void draw_ascii_art(
   }
 }
 
+static int reaper_float_offset(const struct ascii_art *reaper, int height, int frame) {
+  return height > reaper->rows && (frame / 2) % 2 == 1 ? -1 : 0;
+}
+
+static bool refresh_access_log_text(const struct ui_state *state, char **text) {
+  char *fresh = ui_fetch_access_log_text(state->mon_fd);
+  if (fresh == NULL) return false;
+
+  free(*text);
+  *text = fresh;
+  return true;
+}
+
 static void draw_access_log_page(
   const char *text, int offset, const struct ascii_art *reaper, int frame
 ) {
@@ -203,8 +216,7 @@ static void draw_access_log_page(
   const int reaper_left = left_width;
   const int reaper_height = rows - 2;
   const int reaper_width = right_width;
-  const int float_offset =
-    reaper_height > reaper->rows && (frame / 2) % 2 == 1 ? -1 : 0;
+  const int float_offset = reaper_float_offset(reaper, reaper_height, frame);
 
   draw_scroll_box(scroll_top, scroll_left, scroll_height, scroll_width);
   const int total_entries = log_entry_count(text);
@@ -235,14 +247,25 @@ void run_access_log_page(const struct ui_state *state) {
   keypad(stdscr, TRUE);
   timeout(ACCESS_LOG_FRAME_DELAY_MS);
   bool scroll_to_bottom = true;
+  int last_float_offset = 0;
   for (;;) {
     int rows, cols;
     getmaxyx(stdscr, rows, cols);
     (void) cols;
     const int body_rows = rows > 8 ? rows - 8 : 1;
     const int log_rows = body_rows > 1 ? body_rows - 1 : 1;
-    const int max_offset =
+    int max_offset =
       text_line_count(text) > log_rows ? text_line_count(text) - log_rows : 0;
+    const int current_float_offset = reaper_float_offset(&reaper, rows - 2, frame);
+    if (current_float_offset != last_float_offset) {
+      if (refresh_access_log_text(state, &text) && offset >= max_offset) {
+        max_offset =
+          text_line_count(text) > log_rows ? text_line_count(text) - log_rows : 0;
+        scroll_to_bottom = true;
+      }
+      last_float_offset = current_float_offset;
+    }
+
     if (scroll_to_bottom) {
       offset = max_offset;
       scroll_to_bottom = false;
@@ -265,12 +288,7 @@ void run_access_log_page(const struct ui_state *state) {
       offset += body_rows;
       if (offset > max_offset) offset = max_offset;
     } else if (ch == 'r' || ch == 'R') {
-      char *fresh = ui_fetch_access_log_text(state->mon_fd);
-      if (fresh != NULL) {
-        free(text);
-        text = fresh;
-        scroll_to_bottom = true;
-      }
+      if (refresh_access_log_text(state, &text)) scroll_to_bottom = true;
     }
   }
 
