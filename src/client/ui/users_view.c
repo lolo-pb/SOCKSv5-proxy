@@ -584,7 +584,7 @@ static void draw_users_page(
   else
     mvaddnstr(
       rows - 1, 0,
-      "Up/Down: scroll users    a: add user    x: terminate user    b/Esc: back",
+      "Up/Down: scroll users    a: add user    x: terminate user    r: refresh    b/Esc: back",
       cols - 1
     );
   refresh();
@@ -637,6 +637,19 @@ void run_users_page(const struct ui_state *state) {
     }
     if (is_down_key(ch)) {
       if (selected + 1 < users.count) selected++;
+      continue;
+    }
+    if (ch == 'r' || ch == 'R') {
+      char selected_user[MAX_CREDENTIAL_LEN + 1] = "";
+      if (selected >= 0 && selected < users.count)
+        snprintf(selected_user, sizeof(selected_user), "%s", users.names[selected]);
+
+      refresh_users_page_data(state, &users, &known, message, sizeof(message));
+      if (selected_user[0] != '\0') {
+        const int refreshed_index = user_index_by_name(&users, selected_user);
+        if (refreshed_index >= 0) selected = refreshed_index;
+      }
+      if (users.count == 0) selected = -1;
       continue;
     }
     if (ch == 'a' || ch == 'A') {
