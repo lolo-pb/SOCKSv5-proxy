@@ -26,11 +26,19 @@ static bool is_down_key(int ch) {
 }
 
 static int text_line_count(const char *text) {
+  if (text[0] == '\0') return 0;
+
   int lines = 1;
   for (const char *p = text; *p != '\0'; p++) {
-    if (*p == '\n') lines++;
+    if (*p == '\n' && *(p + 1) != '\0') lines++;
   }
   return lines;
+}
+
+static int log_entry_count(const char *text) {
+  if (strcmp(text, "(empty log)\n") == 0 || strcmp(text, "(empty log)") == 0)
+    return 0;
+  return text_line_count(text);
 }
 
 static size_t utf8_columns(const char *s, size_t len) {
@@ -116,17 +124,19 @@ static void draw_scroll_box(int top, int left, int height, int width) {
 }
 
 static void draw_scroll_text(
-  const char *text, int offset, int top, int left, int height, int width
+  const char *text, int offset, int total_entries, int top, int left, int height,
+  int width
 ) {
   const int body_top = top + 3;
   const int body_left = left + 5;
   const int body_rows = height - 6;
+  const int log_rows = body_rows > 1 ? body_rows - 1 : 1;
   const int body_width = width - 9;
   int current = 0;
   int drawn = 0;
   const char *line = text;
 
-  while (*line != '\0' && drawn < body_rows) {
+  while (*line != '\0' && drawn < log_rows) {
     const char *end = strchr(line, '\n');
     const int len = end == NULL ? (int) strlen(line) : (int) (end - line);
     if (current >= offset) {
@@ -139,6 +149,14 @@ static void draw_scroll_text(
     if (end == NULL) break;
     line = end + 1;
   }
+
+  const int last_visible =
+    total_entries == 0 ? 0 : offset + drawn < total_entries ? offset + drawn
+                                                           : total_entries;
+  mvprintw(
+    body_top + body_rows - 1, body_left, "Entries: %d    Last visible: %d",
+    total_entries, last_visible
+  );
 }
 
 static void draw_ascii_art(
@@ -189,8 +207,10 @@ static void draw_access_log_page(
     reaper_height > reaper->rows && (frame / 2) % 2 == 1 ? -1 : 0;
 
   draw_scroll_box(scroll_top, scroll_left, scroll_height, scroll_width);
+  const int total_entries = log_entry_count(text);
   draw_scroll_text(
-    text, offset, scroll_top, scroll_left, scroll_height, scroll_width
+    text, offset, total_entries, scroll_top, scroll_left, scroll_height,
+    scroll_width
   );
   draw_ascii_art(
     reaper, reaper_top, reaper_left, reaper_height, reaper_width, float_offset
@@ -214,13 +234,19 @@ void run_access_log_page(const struct ui_state *state) {
 
   keypad(stdscr, TRUE);
   timeout(ACCESS_LOG_FRAME_DELAY_MS);
+  bool scroll_to_bottom = true;
   for (;;) {
     int rows, cols;
     getmaxyx(stdscr, rows, cols);
     (void) cols;
     const int body_rows = rows > 8 ? rows - 8 : 1;
+    const int log_rows = body_rows > 1 ? body_rows - 1 : 1;
     const int max_offset =
-      text_line_count(text) > body_rows ? text_line_count(text) - body_rows : 0;
+      text_line_count(text) > log_rows ? text_line_count(text) - log_rows : 0;
+    if (scroll_to_bottom) {
+      offset = max_offset;
+      scroll_to_bottom = false;
+    }
     if (offset > max_offset) offset = max_offset;
 
     draw_access_log_page(text, offset, &reaper, frame);
@@ -243,7 +269,7 @@ void run_access_log_page(const struct ui_state *state) {
       if (fresh != NULL) {
         free(text);
         text = fresh;
-        offset = 0;
+        scroll_to_bottom = true;
       }
     }
   }
