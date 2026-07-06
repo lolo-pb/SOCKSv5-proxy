@@ -144,6 +144,7 @@ struct list_ctx {
   uint8_t *buf;
   size_t offset;
   size_t cap;
+  uint8_t count;
 };
 
 static void list_user_cb(const char *name, void *ctx) {
@@ -154,6 +155,7 @@ static void list_user_cb(const char *name, void *ctx) {
     lc->buf[lc->offset++] = (uint8_t) len;
     memcpy(lc->buf + lc->offset, name, len);
     lc->offset += len;
+    if (lc->count < UINT8_MAX) lc->count++;
   }
 }
 
@@ -199,9 +201,9 @@ static void mon_process_request(struct mon_conn *conn) {
     case MON_CMD_LIST_USERS: {
       uint8_t payload[2048];
       struct list_ctx lc =
-        {.buf = payload, .offset = 1, .cap = sizeof(payload)};
-      payload[0] = (uint8_t) user_table_count();
+        {.buf = payload, .offset = 1, .cap = sizeof(payload), .count = 0};
       user_table_list(list_user_cb, &lc);
+      payload[0] = lc.count;
       send_response(conn, MON_STATUS_OK, payload, (uint16_t) lc.offset);
       break;
     }

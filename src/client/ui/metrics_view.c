@@ -74,7 +74,7 @@ static void draw_access_log_line(int y, int x, int width, const char *line, int 
   char timestamp[32];
   char user[64];
   if (sscanf(buf, "%31s %63s", timestamp, user) == 2) {
-    if (timestamp[10] == 'T') timestamp[10] = ' ';
+    if (strlen(timestamp) > 10 && timestamp[10] == 'T') timestamp[10] = ' ';
     mvprintw(y, x, "%.*s  ", 19, timestamp);
     attron(COLOR_PAIR(METRICS_COLOR_LOG_NAME));
     addnstr(user, width > 21 ? width - 21 : 0);
