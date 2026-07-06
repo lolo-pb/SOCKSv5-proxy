@@ -9,8 +9,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "mon_client.h"
-#include "mon_protocol.h"
+#include "ui/access_log_view.h"
 #include "ui/intro_animation.h"
 #include "ui/menu_animation.h"
 #include "ui/metrics_view.h"
@@ -207,29 +206,6 @@ static void show_message_screen(const char *title, const char *message) {
   show_text_screen(title, message);
 }
 
-static void fetch_and_show(
-  const struct ui_state *state, uint8_t cmd, const char *title,
-  payload_formatter formatter
-) {
-  struct ui_response resp;
-  char message[STATUS_LEN];
-  if (!ui_run_command(
-        state, cmd, 0, NULL, NULL, &resp, message, sizeof(message)
-      )) {
-    show_message_screen(title, message);
-    return;
-  }
-
-  char *text = ui_format_payload(&resp, formatter);
-  if (text == NULL) {
-    show_message_screen(title, "Malformed server response");
-    return;
-  }
-
-  show_text_screen(title, text);
-  free(text);
-}
-
 static void show_live_metrics(const struct ui_state *state) {
   if (state->mon_fd < 0) {
     show_message_screen("Metrics", "not connected");
@@ -364,9 +340,7 @@ static void run_main_menu(const struct ui_state *state) {
       } else if (selected == MAIN_MENU_USERS) {
         run_users_page(state);
       } else if (selected == MAIN_MENU_ACCESS_LOG) {
-        fetch_and_show(
-          state, MON_CMD_GET_ACCESS_LOG, "Access Log", mon_format_access_log
-        );
+        run_access_log_page(state);
       }
       animate_main_menu_box();
       message = "";
