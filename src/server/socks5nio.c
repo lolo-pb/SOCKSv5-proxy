@@ -67,7 +67,7 @@ void socksv5_passive_accept(struct selector_key *key) {
   state->client_registered = true;
   socksv5_pool_add(state);
 
-  fprintf(stderr, "new connection fd=%d\n", client);
+  // fprintf(stderr, "new connection fd=%d\n", client);
 }
 
 static void socksv5_read(struct selector_key *key) {

@@ -133,7 +133,7 @@ static void
 relay_shutdown_write_side(int fd, bool *shutdown_done, const char *side) {
   if (*shutdown_done || fd < 0) { return; }
 
-  fprintf(stderr, "partial close: shutdown %s write side fd=%d\n", side, fd);
+  //  fprintf(stderr, "partial close: shutdown %s write side fd=%d\n", side, fd);
   shutdown(fd, SHUT_WR);
   *shutdown_done = true;
 }
@@ -446,7 +446,7 @@ static void client_close(struct socks5 *socks, fd_selector selector) {
   const int fd = socks->client_fd;
   client_unregister(socks, selector);
   if (fd >= 0) {
-    fprintf(stderr, "full close: close client fd=%d\n", fd);
+    // fprintf(stderr, "full close: close client fd=%d\n", fd);
     close(fd);
     if (socks->client_fd == fd) { socks->client_fd = -1; }
   }
@@ -460,7 +460,7 @@ static void origin_close(struct socks5 *socks, fd_selector selector) {
   }
   const int fd = socks->origin_fd;
   if (fd >= 0) {
-    fprintf(stderr, "full close: close origin fd=%d\n", fd);
+    // fprintf(stderr, "full close: close origin fd=%d\n", fd);
     close(fd);
     if (socks->origin_fd == fd) { socks->origin_fd = -1; }
   }
@@ -469,10 +469,10 @@ static void origin_close(struct socks5 *socks, fd_selector selector) {
 void socks5_connection_close(struct socks5 *socks, fd_selector selector) {
   if (socks == NULL || socks->closing) { return; }
 
-  fprintf(
-    stderr, "full close: connection client_fd=%d origin_fd=%d\n",
-    socks->client_fd, socks->origin_fd
-  );
+  // fprintf(
+  //   stderr, "full close: connection client_fd=%d origin_fd=%d\n",
+  //   socks->client_fd, socks->origin_fd
+  // );
   socks->closing = true;
   socks5_cancel(socks);
   client_close(socks, selector);
