@@ -50,6 +50,21 @@ static void stop_accepting(fd_selector selector, int *server) {
   *server = -1;
 }
 
+static void print_startup_banner(const struct socks5args *args) {
+  fprintf(stdout, "\033[H\033[2J\033[3J\033[H");
+  fprintf(stdout, "  ______             _                _______  \n");
+  fprintf(stdout, " / _____)           | |              ( ______) \n");
+  fprintf(stdout, "( (____   ___   ____| |  _  ___ _   _| |____   \n");
+  fprintf(stdout, " \\____ \\ / _ \\ / ___) |_/ )/___) | | (_____ \\  \n");
+  fprintf(stdout, " _____) ) |_| ( (___|  _ ((___ )\\ V / _____) ) \n");
+  fprintf(stdout, "(______/ \\___/ \\____)_| \\_(___/  \\_/ (______/  \n");
+  fprintf(
+    stdout, "Listening on TCP %s:%d\n", args->socks_addr, args->socks_port
+  );
+  fprintf(stdout, "Monitoring on TCP %s:%d\n", args->mng_addr, args->mng_port);
+  fflush(stdout);
+}
+
 int main(const int argc, char **argv) {
   struct socks5args args;
   parse_args(argc, argv, &args);
@@ -94,9 +109,7 @@ int main(const int argc, char **argv) {
   fprintf(stdout, " \\____ \\ / _ \\ / ___) |_/ )/___) | | (_____ \\  \n");
   fprintf(stdout, " _____) ) |_| ( (___|  _ ((___ )\\ V / _____) ) \n");
   fprintf(stdout, "(______/ \\___/ \\____)_| \\_(___/  \\_/ (______/  \n");
-
   fprintf(stdout, "Listening on TCP %s:%d\n", args.socks_addr, args.socks_port);
-
 
   setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int));
 
@@ -196,8 +209,9 @@ int main(const int argc, char **argv) {
       err_msg = "registering monitoring fd";
       goto finally;
     }
-    fprintf(stdout, "Monitoring on TCP %s:%d\n", args.mng_addr, args.mng_port);
   }
+  print_startup_banner(&args);
+
   bool draining = false;
   for (;;) {
     if (shutdown_signals > 0 && !draining) {

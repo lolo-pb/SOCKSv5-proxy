@@ -15,8 +15,8 @@ enum client_cmd {
 
 struct client_args {
   /* connection */
-  char *mng_addr;          /* default 127.0.0.1 */
-  unsigned short mng_port; /* default 8080      */
+  char *mon_addr;          /* default 127.0.0.1 */
+  unsigned short mon_port; /* default 8080      */
 
   /* credentials sent via MON_CMD_AUTH */
   char *username;
@@ -38,7 +38,8 @@ bool client_split_credentials(char *spec, char **user, char **pass);
 /**
  * Parse argv (getopt-style) into args, applying defaults first. On a usage
  * error prints a message + usage to stderr and exits(1); on -h/-v prints and
- * exits(0). On return, args is valid and exactly one command is selected.
+ * exits(0). If no command is selected, the caller should enter interactive UI
+ * mode.
  */
 void client_parse_args(int argc, char **argv, struct client_args *args);
 

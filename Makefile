@@ -1,7 +1,7 @@
 include ./Makefile.inc
 
 SERVER_SOURCES=$(wildcard src/server/*.c)
-CLIENT_SOURCES=$(wildcard src/client/*.c)
+CLIENT_SOURCES=$(wildcard src/client/*.c) $(wildcard src/client/ui/*.c)
 SHARED_SOURCES=$(wildcard src/shared/*.c)
 
 SERVER_OBJECTS=$(SERVER_SOURCES:src/%.c=obj/%.o)
@@ -14,7 +14,8 @@ OBJECTS_FOLDER=./obj
 SERVER_OUTPUT_FILE=$(OUTPUT_FOLDER)/server
 CLIENT_OUTPUT_FILE=$(OUTPUT_FOLDER)/client
 SOCKS_TEST_OUTPUT_FILE=$(OUTPUT_FOLDER)/socks_test
-CHECK_LIBS=$(shell pkg-config --libs check) -lrt -lm
+CHECK_LIBS=$(shell pkg-config --libs check 2>/dev/null || echo -lcheck -lsubunit) -lrt -lm
+CLIENT_LIBS=-lncursesw
 
 all: client server
 server: $(SERVER_OUTPUT_FILE)
@@ -32,11 +33,12 @@ $(SERVER_OUTPUT_FILE): $(SERVER_OBJECTS) $(SHARED_OBJECTS)
 
 $(CLIENT_OUTPUT_FILE): $(CLIENT_OBJECTS) $(SHARED_OBJECTS)
 	mkdir -p $(OUTPUT_FOLDER)
-	$(COMPILER) $(COMPILER_FLAGS) $(LD_FLAGS) $(CLIENT_OBJECTS) $(SHARED_OBJECTS) -o $(CLIENT_OUTPUT_FILE)
+	$(COMPILER) $(COMPILER_FLAGS) $(LD_FLAGS) $(CLIENT_OBJECTS) $(SHARED_OBJECTS) -o $(CLIENT_OUTPUT_FILE) $(CLIENT_LIBS)
 
 obj/%.o: src/%.c
 	mkdir -p $(OBJECTS_FOLDER)/server
 	mkdir -p $(OBJECTS_FOLDER)/client
+	mkdir -p $(OBJECTS_FOLDER)/client/ui
 	mkdir -p $(OBJECTS_FOLDER)/shared
 	$(COMPILER) $(COMPILER_FLAGS) -I src/shared/include -I src/server/include -I src/client/include -c $< -o $@
 

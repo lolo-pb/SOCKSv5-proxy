@@ -1,6 +1,9 @@
 #include "mon_nio.h"
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -143,15 +146,18 @@ struct list_ctx {
   uint8_t *buf;
   size_t offset;
   size_t cap;
+  uint8_t count;
 };
 
 static void list_user_cb(const char *name, void *ctx) {
   struct list_ctx *lc = ctx;
   size_t len = strlen(name);
+  if (len > UINT8_MAX) len = UINT8_MAX;
   if (lc->offset + len + 1 <= lc->cap) {
+    lc->buf[lc->offset++] = (uint8_t) len;
     memcpy(lc->buf + lc->offset, name, len);
     lc->offset += len;
-    lc->buf[lc->offset++] = '\n';
+    if (lc->count < UINT8_MAX) lc->count++;
   }
 }
 
@@ -169,6 +175,9 @@ static void mon_process_request(struct mon_conn *conn) {
         send_response(conn, MON_STATUS_AUTH_FAIL, NULL, 0);
       } else {
         conn->authenticated = true;
+        fprintf(
+          stderr, " [ You're being monitored by %s ... ]\n", req->args[0]
+        );
         send_response(conn, MON_STATUS_OK, NULL, 0);
       }
       break;
@@ -194,10 +203,11 @@ static void mon_process_request(struct mon_conn *conn) {
       break;
 
     case MON_CMD_LIST_USERS: {
-      uint8_t payload[2048];
+      uint8_t payload[MON_BUF_SIZE];
       struct list_ctx lc =
-        {.buf = payload, .offset = 0, .cap = sizeof(payload)};
+        {.buf = payload, .offset = 1, .cap = sizeof(payload), .count = 0};
       user_table_list(list_user_cb, &lc);
+      payload[0] = lc.count;
       send_response(conn, MON_STATUS_OK, payload, (uint16_t) lc.offset);
       break;
     }
@@ -221,27 +231,31 @@ static void mon_process_request(struct mon_conn *conn) {
       unsigned oldest = access_log_oldest_index();
 
       uint8_t payload[4096];
-      size_t off = 0;
+      size_t off = 2;
+      uint16_t encoded = 0;
       for (unsigned i = 0; i < count; i++) {
         unsigned idx = (oldest + i) % MAX_LOG_ENTRIES;
         const struct access_entry *e = &entries[idx];
         uint8_t ulen = (uint8_t) strlen(e->username);
         uint8_t dlen = (uint8_t) strlen(e->dest_addr);
 
-        if (off + 1 + ulen + 1 + dlen + 2 + 8 > sizeof(payload)) break;
+        if (off + 8 + 2 + 1 + ulen + 1 + dlen > sizeof(payload)) break;
 
+        uint64_t ts = (uint64_t) e->timestamp;
+        for (int j = 0; j < 8; j++)
+          payload[off++] = (ts >> (8 * (7 - j))) & 0xFF;
+        payload[off++] = (e->dest_port >> 8) & 0xFF;
+        payload[off++] = e->dest_port & 0xFF;
         payload[off++] = ulen;
         memcpy(payload + off, e->username, ulen);
         off += ulen;
         payload[off++] = dlen;
         memcpy(payload + off, e->dest_addr, dlen);
         off += dlen;
-        payload[off++] = (e->dest_port >> 8) & 0xFF;
-        payload[off++] = e->dest_port & 0xFF;
-        uint64_t ts = (uint64_t) e->timestamp;
-        for (int j = 0; j < 8; j++)
-          payload[off++] = (ts >> (8 * (7 - j))) & 0xFF;
+        encoded++;
       }
+      payload[0] = (encoded >> 8) & 0xFF;
+      payload[1] = encoded & 0xFF;
       send_response(conn, MON_STATUS_OK, payload, (uint16_t) off);
       break;
     }

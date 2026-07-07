@@ -40,12 +40,20 @@ Build output, like `bin/server` and `bin/client`.
 Compiled object files.
 
 
+## Useful Commands
+
 Useful server args:
 
 ```sh
 ./bin/server -p 1080 -l 0.0.0.0 -u user:pass
 ./bin/server -U users.conf
 ./bin/server -N
+```
+
+Send 1 MiB through the SOCKS proxy with curl:
+
+```sh
+curl --socks5-hostname user:pass@127.0.0.1:1080 -o /dev/null https://speed.cloudflare.com/__down?bytes=1048576
 ```
 
 ## Server Files
@@ -112,6 +120,141 @@ Defines `struct socks5`, protocol states/actions, constants, and the protocol AP
 
 `src/server/include/socks5nio.h`
 Public NIO API used by `main.c`: `socksv5_init()`, `socksv5_passive_accept()`, and `socksv5_pool_destroy()`.
+
+## Monitoring / Management
+
+The TP requires a separate monitoring/configuration protocol on a different
+passive socket from SOCKS.
+
+Current code has the monitoring pieces wired in a minimal way.
+
+`src/server/mon_nio.c`
+Management socket handlers. It accepts monitoring clients, parses binary
+monitoring requests, checks auth, and writes binary responses.
+
+Supported management commands in the handler:
+
+- auth
+- add user
+- delete user
+- list users
+- get metrics
+- get access log
+
+`src/server/mon_parser.c`
+Parses monitoring requests from bytes into a `mon_request`. It expects the same
+request layout produced by `mon_request_encode()`:
+
+```text
+version, command, nargs, all arg lengths, then all arg bytes
+```
+
+`src/shared/mon_protocol.c`
+Encodes monitoring requests/responses and decodes responses. This is shared by
+the management client and server.
+
+`src/server/user_table.c`
+Separate user table used by the monitoring code.
+
+Current server wiring:
+
+```text
+src/server/main.c opens the SOCKS listener
+-> opens the management listener from args.mng_addr / args.mng_port
+-> registers socksv5_passive_accept() for SOCKS
+-> registers mon_passive_accept() for monitoring
+-> both listeners share the same selector loop
+```
+
+On graceful shutdown, both passive sockets stop accepting new connections.
+
+Management users are initialized from startup users:
+
+```text
+parse args / users file
+-> SOCKS auth uses args.users
+-> main also copies those users into user_table
+-> monitoring auth checks user_table_lookup()
+```
+
+This keeps initial SOCKS users and initial management users aligned. Runtime
+management add/delete currently changes `user_table`; check whether SOCKS auth
+should also see those runtime changes before relying on it as final behavior.
+
+## Client Program
+
+`src/client/`
+Management client program. It is not a SOCKS consumer. For using the proxy,
+use a SOCKS-capable program like `curl --socks5`.
+
+Current client modes:
+
+```sh
+./bin/client -u lolo:pass -m
+./bin/client -u lolo:pass -U
+./bin/client -u lolo:pass --access-log
+```
+
+These are one-shot management commands.
+
+```sh
+./bin/client
+./bin/client -u lolo:pass
+```
+
+These open the ncurses UI path.
+
+`src/client/client_args.c`
+Parses CLI args. If no command is selected, the caller enters interactive UI
+mode. One-shot commands still require `-u user:pass`.
+
+`src/client/mon_client.c`
+Selector-based one-shot management client. It connects, sends auth, sends one
+command, formats the response to stdout, and exits.
+
+`src/client/client_ui.c`
+ncurses UI shell. It owns login, intro/outro animations, and the main menu.
+Screen-specific drawing lives under `src/client/ui/`.
+
+```text
+start client with no command
+-> play src/client/ui/open_animation.txt
+-> any key during animation skips it
+-> if -u was given, try management auth immediately
+-> otherwise show login form
+-> login sends MON_CMD_AUTH to the management port
+-> on success show main menu
+-> main menu can show live metrics, users, access log, or quit
+-> on exit, play the intro animation in reverse
+```
+
+`src/client/ui/`
+Assets and UI helpers for the ncurses client.
+
+Important pieces:
+
+- `ui_mon_session.c`: shared authenticated monitoring connection helpers.
+- `metrics_view.c`: live metrics drawing.
+- `users_view.c`: user list/details page.
+- `access_log_view.c`: access log scroll page.
+- `intro_animation.c` and `menu_animation.c`: UI animations.
+- `*.txt`: ASCII/Unicode assets used by the UI.
+
+UI requests to the server:
+
+- login sends `MON_CMD_AUTH`
+- metrics sends `MON_CMD_GET_METRICS`
+- users page sends `MON_CMD_LIST_USERS`
+- users page add/delete sends `MON_CMD_ADD_USER` / `MON_CMD_DEL_USER`
+- users page also reads `MON_CMD_GET_ACCESS_LOG` to show last connection per user
+- access log page sends `MON_CMD_GET_ACCESS_LOG`, and refreshes it on demand
+
+`src/client/ui/open_animation.txt`
+ASCII/Unicode animation frames. Frames are separated by lines containing only:
+
+```text
+#
+```
 
 ## Shared Files
 

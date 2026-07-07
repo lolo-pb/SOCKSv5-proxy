@@ -9,26 +9,28 @@
 #include <unistd.h>
 
 #include "client_args.h"
-#include "mng_client.h"
+#include "client_ui.h"
+#include "mon_client.h"
 #include "selector.h"
 
 /* overall deadline for the whole exchange (connect + auth + command) */
 #define CLIENT_TIMEOUT_SEC 10
 
 static int run_against_addr(
-  fd_selector s, struct mng_client *client, const struct client_args *args,
+  fd_selector s, struct mon_client *client, const struct client_args *args,
   const struct addrinfo *rp, time_t deadline
 );
 
 int main(int argc, char *argv[]) {
   struct client_args args;
   client_parse_args(argc, argv, &args); /* exits on error / -h / -v */
+  if (args.cmd == CLIENT_CMD_NONE) return client_ui_run(&args);
 
   /* a closed peer must not kill us with SIGPIPE; we check send()/recv(). */
   signal(SIGPIPE, SIG_IGN);
 
   char portstr[6];
-  snprintf(portstr, sizeof(portstr), "%u", args.mng_port);
+  snprintf(portstr, sizeof(portstr), "%u", args.mon_port);
 
   struct addrinfo hints;
   memset(&hints, 0, sizeof(hints));
@@ -36,13 +38,13 @@ int main(int argc, char *argv[]) {
   hints.ai_socktype = SOCK_STREAM;
 
   struct addrinfo *res = NULL;
-  const int gai = getaddrinfo(args.mng_addr, portstr, &hints, &res);
+  const int gai = getaddrinfo(args.mon_addr, portstr, &hints, &res);
   if (gai != 0) {
     fprintf(
-      stderr, "client: cannot resolve %s:%s: %s\n", args.mng_addr, portstr,
+      stderr, "client: cannot resolve %s:%s: %s\n", args.mon_addr, portstr,
       gai_strerror(gai)
     );
-    return MNG_EXIT_IO;
+    return MON_EXIT_IO;
   }
 
   const struct selector_init conf = {
@@ -52,12 +54,12 @@ int main(int argc, char *argv[]) {
   if (selector_init(&conf) != 0) {
     fprintf(stderr, "client: cannot initialize selector\n");
     freeaddrinfo(res);
-    return MNG_EXIT_IO;
+    return MON_EXIT_IO;
   }
 
   fd_selector s = selector_new(16);
-  struct mng_client *client = malloc(sizeof(*client));
-  int exit_code = MNG_EXIT_IO;
+  struct mon_client *client = malloc(sizeof(*client));
+  int exit_code = MON_EXIT_IO;
   if (s == NULL || client == NULL) {
     fprintf(stderr, "client: out of memory\n");
     goto finally;
@@ -77,9 +79,9 @@ int main(int argc, char *argv[]) {
   }
   if (!connected) {
     fprintf(
-      stderr, "client: could not connect to %s:%s\n", args.mng_addr, portstr
+      stderr, "client: could not connect to %s:%s\n", args.mon_addr, portstr
     );
-    exit_code = MNG_EXIT_IO;
+    exit_code = MON_EXIT_IO;
   }
 
 finally:
@@ -96,7 +98,7 @@ finally:
  * the connection itself failed and the caller should try the next address.
  */
 static int run_against_addr(
-  fd_selector s, struct mng_client *client, const struct client_args *args,
+  fd_selector s, struct mon_client *client, const struct client_args *args,
   const struct addrinfo *rp, time_t deadline
 ) {
   const int fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
@@ -110,9 +112,9 @@ static int run_against_addr(
     return -1;
   }
 
-  mng_client_init(client, args);
+  mon_client_init(client, args);
   if (
-    selector_register(s, fd, mng_client_handler(), OP_WRITE, client) !=
+    selector_register(s, fd, mon_client_handler(), OP_WRITE, client) !=
     SELECTOR_SUCCESS
   ) {
     close(fd);
@@ -123,17 +125,17 @@ static int run_against_addr(
     if (selector_select(s) != SELECTOR_SUCCESS) {
       selector_unregister_fd(s, fd);
       close(fd);
-      return MNG_EXIT_IO;
+      return MON_EXIT_IO;
     }
     if (time(NULL) >= deadline) {
       fprintf(stderr, "client: timed out\n");
       selector_unregister_fd(s, fd);
       close(fd);
-      return MNG_EXIT_IO;
+      return MON_EXIT_IO;
     }
   }
 
-  /* mng_finish() already unregistered + closed the fd */
+  /* mon_finish() already unregistered + closed the fd */
   if (client->connect_failed) return -1; /* try the next address */
   return client->result;
 }
