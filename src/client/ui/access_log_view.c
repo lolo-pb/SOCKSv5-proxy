@@ -124,8 +124,8 @@ static void draw_scroll_box(int top, int left, int height, int width) {
 }
 
 static void draw_scroll_text(
-  const char *text, int offset, int total_entries, int top, int left, int height,
-  int width
+  const char *text, int offset, int total_entries, int top, int left,
+  int height, int width
 ) {
   const int body_top = top + 3;
   const int body_left = left + 5;
@@ -150,9 +150,9 @@ static void draw_scroll_text(
     line = end + 1;
   }
 
-  const int last_visible =
-    total_entries == 0 ? 0 : offset + drawn < total_entries ? offset + drawn
-                                                           : total_entries;
+  const int last_visible = total_entries == 0               ? 0
+                           : offset + drawn < total_entries ? offset + drawn
+                                                            : total_entries;
   mvprintw(
     body_top + body_rows - 1, body_left, "Entries: %d    Last visible: %d",
     total_entries, last_visible
@@ -179,7 +179,8 @@ static void draw_ascii_art(
   }
 }
 
-static int reaper_float_offset(const struct ascii_art *reaper, int height, int frame) {
+static int
+reaper_float_offset(const struct ascii_art *reaper, int height, int frame) {
   return height > reaper->rows && (frame / 2) % 2 == 1 ? -1 : 0;
 }
 
@@ -256,11 +257,13 @@ void run_access_log_page(const struct ui_state *state) {
     const int log_rows = body_rows > 1 ? body_rows - 1 : 1;
     int max_offset =
       text_line_count(text) > log_rows ? text_line_count(text) - log_rows : 0;
-    const int current_float_offset = reaper_float_offset(&reaper, rows - 2, frame);
+    const int current_float_offset =
+      reaper_float_offset(&reaper, rows - 2, frame);
     if (current_float_offset != last_float_offset) {
       if (refresh_access_log_text(state, &text) && offset >= max_offset) {
-        max_offset =
-          text_line_count(text) > log_rows ? text_line_count(text) - log_rows : 0;
+        max_offset = text_line_count(text) > log_rows
+                       ? text_line_count(text) - log_rows
+                       : 0;
         scroll_to_bottom = true;
       }
       last_float_offset = current_float_offset;

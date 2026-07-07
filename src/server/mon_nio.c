@@ -62,8 +62,10 @@ void mon_passive_accept(struct selector_key *key) {
   buffer_init(&conn->write_buffer, MON_BUF_SIZE, conn->raw_write);
   mon_parser_init(&conn->parser);
 
-  if (selector_register(key->s, client, &mon_handler, OP_READ, conn) !=
-      SELECTOR_SUCCESS) {
+  if (
+    selector_register(key->s, client, &mon_handler, OP_READ, conn) !=
+    SELECTOR_SUCCESS
+  ) {
     free(conn);
     close(client);
   }
@@ -173,7 +175,9 @@ static void mon_process_request(struct mon_conn *conn) {
         send_response(conn, MON_STATUS_AUTH_FAIL, NULL, 0);
       } else {
         conn->authenticated = true;
-        fprintf(stderr, " [ You're being monitored by %s ... ]\n", req->args[0]);
+        fprintf(
+          stderr, " [ You're being monitored by %s ... ]\n", req->args[0]
+        );
         send_response(conn, MON_STATUS_OK, NULL, 0);
       }
       break;
@@ -199,7 +203,7 @@ static void mon_process_request(struct mon_conn *conn) {
       break;
 
     case MON_CMD_LIST_USERS: {
-      uint8_t payload[2048];
+      uint8_t payload[MON_BUF_SIZE];
       struct list_ctx lc =
         {.buf = payload, .offset = 1, .cap = sizeof(payload), .count = 0};
       user_table_list(list_user_cb, &lc);

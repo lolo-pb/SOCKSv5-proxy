@@ -27,7 +27,9 @@ void metrics_graph_init(struct metrics_graph *graph) {
   memset(graph, 0, sizeof(*graph));
 }
 
-void metrics_graph_record(struct metrics_graph *graph, uint64_t current_connections) {
+void metrics_graph_record(
+  struct metrics_graph *graph, uint64_t current_connections
+) {
   if (graph->count < METRICS_GRAPH_MAX_POINTS) {
     graph->values[graph->count++] = current_connections;
   } else {
@@ -99,9 +101,11 @@ static const char *line_at(const char *text, int idx, int *len) {
   return line;
 }
 
-static void draw_access_log_line(int y, int x, int width, const char *line, int len) {
+static void
+draw_access_log_line(int y, int x, int width, const char *line, int len) {
   char buf[256];
-  const int copy_len = len < (int) sizeof(buf) - 1 ? len : (int) sizeof(buf) - 1;
+  const int copy_len =
+    len < (int) sizeof(buf) - 1 ? len : (int) sizeof(buf) - 1;
   memcpy(buf, line, (size_t) copy_len);
   buf[copy_len] = '\0';
 
@@ -118,7 +122,8 @@ static void draw_access_log_line(int y, int x, int width, const char *line, int 
   }
 }
 
-static void draw_box(int top, int left, int height, int width, const char *title) {
+static void
+draw_box(int top, int left, int height, int width, const char *title) {
   mvaddch(top, left, '+');
   mvhline(top, left + 1, '-', width - 2);
   mvaddch(top, left + width - 1, '+');
@@ -170,10 +175,9 @@ static void draw_graph_space(
     return;
   }
 
-  const unsigned visible =
-    graph != NULL && graph->count < (unsigned) plot_width
-      ? graph->count
-      : (unsigned) plot_width;
+  const unsigned visible = graph != NULL && graph->count < (unsigned) plot_width
+                             ? graph->count
+                             : (unsigned) plot_width;
   const unsigned first = graph != NULL ? graph->count - visible : 0;
 
   uint64_t y_min;
@@ -182,7 +186,8 @@ static void draw_graph_space(
     graph_y_bounds(graph, first, visible, plot_height, &y_min, &y_max);
   } else {
     const uint64_t y_span = (uint64_t) plot_height;
-    y_min = current_connections >= y_span ? current_connections - y_span + 1 : 0;
+    y_min =
+      current_connections >= y_span ? current_connections - y_span + 1 : 0;
     y_max = y_min + y_span - 1;
   }
   const uint64_t y_range = y_max - y_min;
@@ -224,9 +229,8 @@ static void draw_graph_space(
   }
 }
 
-static void draw_bar_row(
-  int y, int x, int width, const char *label, uint64_t value
-) {
+static void
+draw_bar_row(int y, int x, int width, const char *label, uint64_t value) {
   const int label_width = 10;
   const int prefix_width = label_width + 3;
   const int bar_width = width - prefix_width;
@@ -251,7 +255,8 @@ static void draw_bar_row(
 }
 
 static void draw_counters(
-  int top, int left, int height, int width, const struct metrics_view_data *metrics
+  int top, int left, int height, int width,
+  const struct metrics_view_data *metrics
 ) {
   draw_box(top, left, height, width, "Totals");
 
@@ -270,7 +275,8 @@ static void draw_counters(
     );
   if (top + 2 <= last_content_row)
     mvprintw(top + 2, x, "Total bytes sent:    %" PRIu64, bytes);
-  if (top + 4 <= last_content_row) draw_bar_row(top + 4, x, row_width, "Bytes", bytes);
+  if (top + 4 <= last_content_row)
+    draw_bar_row(top + 4, x, row_width, "Bytes", bytes);
   if (top + 5 <= last_content_row)
     draw_bar_row(top + 5, x, row_width, "KiloBytes", kilobytes);
   if (top + 6 <= last_content_row)
@@ -300,7 +306,9 @@ void draw_metrics_view(
   const int graph_height = content_height * 2 / 3;
   const int totals_height = content_height - graph_height;
 
-  draw_access_log(0, 0, content_height, left_width, access_log, access_log_offset);
+  draw_access_log(
+    0, 0, content_height, left_width, access_log, access_log_offset
+  );
   draw_graph_space(
     0, left_width, graph_height, right_width, graph,
     metrics->current_connections
@@ -308,8 +316,7 @@ void draw_metrics_view(
   draw_counters(graph_height, left_width, totals_height, right_width, metrics);
 
   mvaddnstr(
-    footer_row, 0, "Auto-refresh: 1s    r: refresh now    b/Esc: back",
-    cols - 1
+    footer_row, 0, "Auto-refresh: 1s    r: refresh now    b/Esc: back", cols - 1
   );
   refresh();
 }

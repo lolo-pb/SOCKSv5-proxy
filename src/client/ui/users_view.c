@@ -61,9 +61,7 @@ static bool is_backspace_key(int ch) {
   return ch == KEY_BACKSPACE || ch == 127 || ch == '\b';
 }
 
-static bool is_printable_ascii(int ch) {
-  return ch >= 32 && ch <= 126;
-}
+static bool is_printable_ascii(int ch) { return ch >= 32 && ch <= 126; }
 
 static bool append_char(char *dst, int ch) {
   const size_t len = strlen(dst);
@@ -211,20 +209,25 @@ static void remember_user_password(
   }
 
   if (known->count >= USERS_MAX_COUNT) return;
-  snprintf(known->names[known->count], sizeof(known->names[known->count]), "%s", user);
   snprintf(
-    known->passwords[known->count], sizeof(known->passwords[known->count]), "%s",
-    pass
+    known->names[known->count], sizeof(known->names[known->count]), "%s", user
+  );
+  snprintf(
+    known->passwords[known->count], sizeof(known->passwords[known->count]),
+    "%s", pass
   );
   known->count++;
 }
 
-static void forget_user_password(struct known_user_passwords *known, const char *user) {
+static void
+forget_user_password(struct known_user_passwords *known, const char *user) {
   for (int i = 0; i < known->count; i++) {
     if (strcmp(known->names[i], user) == 0) {
       known->count--;
       if (i != known->count) {
-        memmove(known->names[i], known->names[known->count], sizeof(known->names[i]));
+        memmove(
+          known->names[i], known->names[known->count], sizeof(known->names[i])
+        );
         memmove(
           known->passwords[i], known->passwords[known->count],
           sizeof(known->passwords[i])
@@ -235,9 +238,8 @@ static void forget_user_password(struct known_user_passwords *known, const char 
   }
 }
 
-static const char *known_password_for(
-  const struct known_user_passwords *known, const char *user
-) {
+static const char *
+known_password_for(const struct known_user_passwords *known, const char *user) {
   for (int i = 0; i < known->count; i++) {
     if (strcmp(known->names[i], user) == 0) return known->passwords[i];
   }
@@ -254,7 +256,8 @@ static void apply_known_passwords(
   }
 }
 
-static int user_index_by_name(const struct users_page_data *users, const char *name) {
+static int
+user_index_by_name(const struct users_page_data *users, const char *name) {
   for (int i = 0; i < users->count; i++) {
     if (strcmp(users->names[i], name) == 0) return i;
   }
@@ -324,8 +327,10 @@ static bool fetch_user_last_connections(
     off += addr_len;
 
     for (int j = 0; j < users->count; j++) {
-      if (strlen(users->names[j]) != user_len ||
-          memcmp(users->names[j], user, user_len) != 0)
+      if (
+        strlen(users->names[j]) != user_len ||
+        memcmp(users->names[j], user, user_len) != 0
+      )
         continue;
 
       char tbuf[32];
@@ -337,8 +342,8 @@ static bool fetch_user_last_connections(
         snprintf(tbuf, sizeof(tbuf), "%llu", (unsigned long long) ts);
       }
       snprintf(
-        users->last_connections[j], sizeof(users->last_connections[j]),
-        "%s", tbuf
+        users->last_connections[j], sizeof(users->last_connections[j]), "%s",
+        tbuf
       );
       snprintf(
         users->last_destinations[j], sizeof(users->last_destinations[j]),
@@ -360,8 +365,9 @@ static void refresh_users_page_data(
   fetch_user_last_connections(state, users, message, message_len);
 }
 
-static void draw_add_user_form(const char *user, const char *pass, int field,
-                               const char *message) {
+static void draw_add_user_form(
+  const char *user, const char *pass, int field, const char *message
+) {
   int rows, cols;
   getmaxyx(stdscr, rows, cols);
 
@@ -504,8 +510,10 @@ static void draw_user_detail_box(
   const int box_height = skull_rows + 2;
   const int box_width = USERS_DETAIL_BOX_WIDTH;
   const int details_width = box_width - skull_area_width - 3;
-  if (right_width < box_width || page_height < box_height + 1 ||
-      details_width < 11) {
+  if (
+    right_width < box_width || page_height < box_height + 1 ||
+    details_width < 11
+  ) {
     mvaddstr(1, right_left + 1, "terminal too small");
     return;
   }
@@ -526,9 +534,9 @@ static void draw_user_detail_box(
     users->count > 0 && selected >= 0 && users->passwords[selected][0] != '\0'
       ? users->passwords[selected]
       : "(unknown)";
-  const char *last_connection =
-    users->count > 0 && selected >= 0 ? users->last_connections[selected]
-                                      : "(none)";
+  const char *last_connection = users->count > 0 && selected >= 0
+                                  ? users->last_connections[selected]
+                                  : "(none)";
   const char *last_destination =
     users->count > 0 && selected >= 0 &&
         users->last_destinations[selected][0] != '\0'
@@ -584,7 +592,8 @@ static void draw_users_page(
   else
     mvaddnstr(
       rows - 1, 0,
-      "Up/Down: scroll users    a: add user    x: terminate user    r: refresh    b/Esc: back",
+      "Up/Down: scroll users    a: add user    x: terminate user    r: refresh "
+      "   b/Esc: back",
       cols - 1
     );
   refresh();
@@ -642,7 +651,9 @@ void run_users_page(const struct ui_state *state) {
     if (ch == 'r' || ch == 'R') {
       char selected_user[MAX_CREDENTIAL_LEN + 1] = "";
       if (selected >= 0 && selected < users.count)
-        snprintf(selected_user, sizeof(selected_user), "%s", users.names[selected]);
+        snprintf(
+          selected_user, sizeof(selected_user), "%s", users.names[selected]
+        );
 
       refresh_users_page_data(state, &users, &known, message, sizeof(message));
       if (selected_user[0] != '\0') {
@@ -659,7 +670,9 @@ void run_users_page(const struct ui_state *state) {
       if (run_add_user_form(user, pass)) {
         if (add_user(state, user, pass, message, sizeof(message))) {
           remember_user_password(&known, user, pass);
-          refresh_users_page_data(state, &users, &known, message, sizeof(message));
+          refresh_users_page_data(
+            state, &users, &known, message, sizeof(message)
+          );
           selected = user_index_by_name(&users, user);
         }
       }
@@ -671,7 +684,9 @@ void run_users_page(const struct ui_state *state) {
       snprintf(deleted, sizeof(deleted), "%s", users.names[selected]);
       if (delete_user(state, deleted, message, sizeof(message))) {
         forget_user_password(&known, deleted);
-        refresh_users_page_data(state, &users, &known, message, sizeof(message));
+        refresh_users_page_data(
+          state, &users, &known, message, sizeof(message)
+        );
         if (users.count == 0) {
           selected = -1;
         } else if (selected >= users.count) {

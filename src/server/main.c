@@ -129,8 +129,10 @@ int main(const int argc, char **argv) {
     .sa_handler = sigterm_handler,
   };
   sigemptyset(&shutdown_action.sa_mask);
-  if (sigaction(SIGTERM, &shutdown_action, NULL) == -1 ||
-      sigaction(SIGINT, &shutdown_action, NULL) == -1) {
+  if (
+    sigaction(SIGTERM, &shutdown_action, NULL) == -1 ||
+    sigaction(SIGINT, &shutdown_action, NULL) == -1
+  ) {
     err_msg = "registering signal handlers";
     goto finally;
   }
@@ -142,11 +144,10 @@ int main(const int argc, char **argv) {
   }
   const struct selector_init conf = {
     .signal = SIGALRM,
-    .select_timeout =
-      {
-        .tv_sec = 10,
-        .tv_nsec = 0,
-      },
+    .select_timeout = {
+      .tv_sec = 10,
+      .tv_nsec = 0,
+    },
   };
   if (0 != selector_init(&conf)) {
     err_msg = "initializing selector";

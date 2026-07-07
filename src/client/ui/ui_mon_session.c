@@ -117,9 +117,11 @@ static int connect_authenticated_at_addr(
   uint8_t request[3 + MON_MAX_ARGS * (1 + MON_MAX_ARG_LEN)];
   int request_len = 0;
   struct ui_response auth_resp;
-  if (!build_auth_request(state, request, sizeof(request), &request_len) ||
-      !send_all(fd, request, (size_t) request_len) ||
-      !recv_response(fd, &auth_resp)) {
+  if (
+    !build_auth_request(state, request, sizeof(request), &request_len) ||
+    !send_all(fd, request, (size_t) request_len) ||
+    !recv_response(fd, &auth_resp)
+  ) {
     close(fd);
     snprintf(message, message_len, "authentication request failed");
     return -2;
@@ -127,7 +129,9 @@ static int connect_authenticated_at_addr(
 
   if (auth_resp.status != MON_STATUS_OK) {
     close(fd);
-    snprintf(message, message_len, "%s", ui_mon_status_message(auth_resp.status));
+    snprintf(
+      message, message_len, "%s", ui_mon_status_message(auth_resp.status)
+    );
     return -2;
   }
 
@@ -148,7 +152,9 @@ static int connect_authenticated(
   struct addrinfo *res = NULL;
   const int gai = getaddrinfo(state->mon_addr, port, &hints, &res);
   if (gai != 0) {
-    snprintf(message, message_len, "cannot resolve %s:%s", state->mon_addr, port);
+    snprintf(
+      message, message_len, "cannot resolve %s:%s", state->mon_addr, port
+    );
     return -1;
   }
 
@@ -168,7 +174,9 @@ static int connect_authenticated(
   freeaddrinfo(res);
 
   if (!reached)
-    snprintf(message, message_len, "could not connect to %s:%s", state->mon_addr, port);
+    snprintf(
+      message, message_len, "could not connect to %s:%s", state->mon_addr, port
+    );
 
   return fd;
 }
@@ -227,9 +235,8 @@ bool ui_run_command(
   return out->status == MON_STATUS_OK;
 }
 
-char *ui_format_payload(
-  const struct ui_response *resp, payload_formatter formatter
-) {
+char *
+ui_format_payload(const struct ui_response *resp, payload_formatter formatter) {
   char *text = NULL;
   size_t len = 0;
   FILE *out = open_memstream(&text, &len);
@@ -257,8 +264,7 @@ bool ui_fetch_metrics_data(int fd, struct metrics_view_data *metrics) {
   struct ui_response resp;
   if (!send_command_on_fd(fd, MON_CMD_GET_METRICS, 0, NULL, NULL, &resp))
     return false;
-  if (resp.status != MON_STATUS_OK)
-    return false;
+  if (resp.status != MON_STATUS_OK) return false;
   if (resp.payload_len != MON_METRICS_PAYLOAD_LEN) return false;
 
   metrics->historic_connections = ui_be_u64(resp.payload);

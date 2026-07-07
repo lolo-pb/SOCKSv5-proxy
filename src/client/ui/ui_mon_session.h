@@ -38,9 +38,8 @@ bool ui_run_command(
   const struct ui_state *state, uint8_t cmd, unsigned nargs, const char *arg0,
   const char *arg1, struct ui_response *out, char *message, size_t message_len
 );
-char *ui_format_payload(
-  const struct ui_response *resp, payload_formatter formatter
-);
+char *
+ui_format_payload(const struct ui_response *resp, payload_formatter formatter);
 char *ui_copy_text(const char *text);
 bool ui_fetch_metrics_data(int fd, struct metrics_view_data *metrics);
 char *ui_fetch_access_log_text(int fd);

@@ -19,7 +19,9 @@ struct metrics_graph {
 
 void metrics_view_init_colors(void);
 void metrics_graph_init(struct metrics_graph *graph);
-void metrics_graph_record(struct metrics_graph *graph, uint64_t current_connections);
+void metrics_graph_record(
+  struct metrics_graph *graph, uint64_t current_connections
+);
 void draw_metrics_view(
   const struct metrics_view_data *metrics, const char *access_log,
   int access_log_offset, const struct metrics_graph *graph
