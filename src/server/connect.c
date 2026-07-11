@@ -219,6 +219,10 @@ static void origin_read(struct selector_key *key) {
 
   if (bytes > 0) {
     buffer_write_adv(&socks->write_buffer, bytes);
+    if (!relay_flush(socks->client_fd, &socks->write_buffer)) {
+      socks5_connection_close(socks, key->s);
+      return;
+    }
   } else if (bytes == 0) {
     socks->origin_eof = true;
   } else if (!is_retryable()) {
@@ -243,14 +247,7 @@ static void origin_write(struct selector_key *key) {
     return;
   }
 
-  size_t count;
-  uint8_t *ptr = buffer_read_ptr(&socks->read_buffer, &count);
-  const ssize_t bytes = write(key->fd, ptr, count);
-
-  if (bytes > 0) {
-    buffer_read_adv(&socks->read_buffer, bytes);
-    metrics_add_bytes(bytes);
-  } else if (bytes < 0 && !is_retryable()) {
+  if (!relay_flush(key->fd, &socks->read_buffer)) {
     socks5_connection_close(socks, key->s);
     return;
   }

@@ -110,6 +110,7 @@ void socks5_connection_close(struct socks5 *socks, fd_selector selector);
 
 bool relay_should_close(struct socks5 *socks);
 void relay_update_interests(struct socks5 *socks, fd_selector selector);
+bool relay_flush(int fd, buffer *buf);
 bool socks5_is_relaying(struct socks5 *socks);
 socks5_action
 socks5_relay_client_read(struct socks5 *socks, struct selector_key *key);
