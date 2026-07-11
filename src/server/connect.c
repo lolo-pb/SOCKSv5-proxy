@@ -206,7 +206,7 @@ origin_connect_write_handler(struct socks5 *socks, struct selector_key *key) {
 }
 
 // Retryable I/O helper
-static bool is_retryable(void) {
+static bool is_retryable_io_error(void) {
   return errno == EAGAIN || errno == EWOULDBLOCK;
 }
 
@@ -225,7 +225,7 @@ static void origin_read(struct selector_key *key) {
     }
   } else if (bytes == 0) {
     socks->origin_eof = true;
-  } else if (!is_retryable()) {
+  } else if (!is_retryable_io_error()) {
     socks5_connection_close(socks, key->s);
     return;
   }
