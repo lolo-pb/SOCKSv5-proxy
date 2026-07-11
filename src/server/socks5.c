@@ -195,6 +195,24 @@ static bool is_retryable_io_error(void) {
   return errno == EAGAIN || errno == EWOULDBLOCK;
 }
 
+// Attempts to drain `buf` into `fd` right away (select -> read -> write).
+// Returns false on a fatal write error.
+bool relay_flush(int fd, buffer *buf) {
+  if (fd < 0 || !buffer_can_read(buf)) { return true; }
+
+  size_t count;
+  uint8_t *ptr = buffer_read_ptr(buf, &count);
+  const ssize_t bytes = write(fd, ptr, count);
+
+  if (bytes > 0) {
+    buffer_read_adv(buf, bytes);
+    metrics_add_bytes(bytes);
+  } else if (bytes < 0 && !is_retryable_io_error()) {
+    return false;
+  }
+  return true;
+}
+
 // Reads client bytes into the client-to-origin relay buffer.
 socks5_action
 socks5_relay_client_read(struct socks5 *socks, struct selector_key *key) {
@@ -204,6 +222,9 @@ socks5_relay_client_read(struct socks5 *socks, struct selector_key *key) {
 
   if (bytes > 0) {
     buffer_write_adv(&socks->read_buffer, bytes);
+    if (!relay_flush(socks->origin_fd, &socks->read_buffer)) {
+      return SOCKS5_ACTION_CLOSE;
+    }
   } else if (bytes == 0) {
     socks->client_eof = true;
   } else if (!is_retryable_io_error()) {
@@ -218,14 +239,7 @@ socks5_relay_client_read(struct socks5 *socks, struct selector_key *key) {
 // Writes origin bytes from the origin-to-client relay buffer.
 socks5_action
 socks5_relay_client_write(struct socks5 *socks, struct selector_key *key) {
-  size_t count;
-  uint8_t *ptr = buffer_read_ptr(&socks->write_buffer, &count);
-  const ssize_t bytes = write(key->fd, ptr, count);
-
-  if (bytes > 0) {
-    buffer_read_adv(&socks->write_buffer, bytes);
-    metrics_add_bytes(bytes);
-  } else if (bytes < 0 && !is_retryable_io_error()) {
+  if (!relay_flush(key->fd, &socks->write_buffer)) {
     return SOCKS5_ACTION_CLOSE;
   }
 
