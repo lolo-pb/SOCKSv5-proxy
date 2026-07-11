@@ -17,3 +17,7 @@ Thumbs.db
 
 # Personal docs
 .per/
+
+# Private files
+lolo-agent-notes.md
+users.conf
