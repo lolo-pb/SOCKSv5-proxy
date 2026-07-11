@@ -18,7 +18,7 @@ Servidor proxy SOCKSv5 (RFC 1928) con autenticación usuario/contraseña (RFC 19
 make
 ```
 
-Requiere gcc con soporte C11, pthreads, y libncurses. Produce los binarios en `bin/`.
+Requiere gcc con soporte C11, pthreads, y libncursesw. Produce los binarios en `bin/`.
 
 | Artefacto | Ubicación |
 |-----------|-----------|
