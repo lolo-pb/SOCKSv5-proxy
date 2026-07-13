@@ -102,15 +102,6 @@ int main(const int argc, char **argv) {
     goto finally;
   }
 
-  fprintf(stdout, "\033[2J\033[H");
-  fprintf(stdout, "  ______             _                _______  \n");
-  fprintf(stdout, " / _____)           | |              ( ______) \n");
-  fprintf(stdout, "( (____   ___   ____| |  _  ___ _   _| |____   \n");
-  fprintf(stdout, " \\____ \\ / _ \\ / ___) |_/ )/___) | | (_____ \\  \n");
-  fprintf(stdout, " _____) ) |_| ( (___|  _ ((___ )\\ V / _____) ) \n");
-  fprintf(stdout, "(______/ \\___/ \\____)_| \\_(___/  \\_/ (______/  \n");
-  fprintf(stdout, "Listening on TCP %s:%d\n", args.socks_addr, args.socks_port);
-
   setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int));
 
   if (bind(server, (struct sockaddr *) &addr, sizeof(addr)) < 0) {

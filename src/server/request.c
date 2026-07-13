@@ -107,14 +107,11 @@ int request_marshall_reply(
   uint8_t *buff = buffer_write_ptr(b, &n);
 
   uint8_t atyp = SOCKS5_ATYP_IPV4;
-  const void *addr = NULL;
-  const void *port = NULL;
   size_t addr_len = 4;
   uint8_t zero_addr[16] = {0};
   uint8_t zero_port[2] = {0};
-
-  addr = zero_addr;
-  port = zero_port;
+  const void *addr = zero_addr;
+  const void *port = zero_port;
 
   if (
     bind_addr != NULL && bind_addr->sa_family == AF_INET &&
