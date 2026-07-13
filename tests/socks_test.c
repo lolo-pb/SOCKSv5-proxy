@@ -181,7 +181,7 @@ static const struct fd_handler dummy_handler = {
   .handle_close = NULL,
 };
 
-START_TEST(test_relay_client_read_keeps_selector_interests_alive) {
+START_TEST(test_relay_client_read_flushes_to_origin_immediately) {
   init_selector_for_test();
 
   int client_pair[2];
@@ -222,8 +222,80 @@ START_TEST(test_relay_client_read_keeps_selector_interests_alive) {
     .data = &socks,
   };
   ck_assert_int_eq(SOCKS5_ACTION_NONE, socks5_relay_client_read(&socks, &key));
-  assert_buffer_eq(&socks.read_buffer, payload, sizeof(payload));
 
+  // select -> read -> write: bytes go straight to the origin fd, so nothing
+  // stays buffered and no OP_WRITE subscription is needed.
+  ck_assert(!buffer_can_read(&socks.read_buffer));
+
+  uint8_t got[sizeof(payload)];
+  ck_assert_int_eq(
+    (ssize_t) sizeof(got), read(origin_pair[0], got, sizeof(got))
+  );
+  ck_assert_mem_eq(got, payload, sizeof(payload));
+
+  ck_assert(selector->fds[socks.client_fd].interest & OP_READ);
+  ck_assert(!(selector->fds[socks.origin_fd].interest & OP_WRITE));
+
+  selector_destroy(selector);
+  close(client_pair[0]);
+  close(client_pair[1]);
+  close(origin_pair[0]);
+  close(origin_pair[1]);
+  pthread_mutex_destroy(&socks.dns_mutex);
+}
+END_TEST
+
+START_TEST(test_relay_client_read_keeps_bytes_buffered_when_origin_blocked) {
+  init_selector_for_test();
+
+  int client_pair[2];
+  int origin_pair[2];
+  ck_assert_int_eq(0, socketpair(AF_UNIX, SOCK_STREAM, 0, client_pair));
+  ck_assert_int_eq(0, socketpair(AF_UNIX, SOCK_STREAM, 0, origin_pair));
+
+  fd_selector selector = selector_new(32);
+  ck_assert_ptr_nonnull(selector);
+
+  struct socks5 socks;
+  socks5_init(&socks);
+  socks.client_fd = client_pair[1];
+  socks.origin_fd = origin_pair[1];
+  socks.relay_started = true;
+
+  // Fill the origin send buffer so the immediate flush hits EAGAIN.
+  ck_assert_int_eq(0, selector_fd_set_nio(origin_pair[1]));
+  uint8_t junk[4096] = {0};
+  while (write(origin_pair[1], junk, sizeof(junk)) > 0) {}
+  ck_assert(is_retryable_io_error());
+
+  ck_assert_int_eq(
+    SELECTOR_SUCCESS,
+    selector_register(
+      selector, socks.client_fd, &dummy_handler, OP_READ, &socks
+    )
+  );
+  ck_assert_int_eq(
+    SELECTOR_SUCCESS,
+    selector_register(
+      selector, socks.origin_fd, &dummy_handler, OP_NOOP, &socks
+    )
+  );
+
+  const uint8_t payload[] = {'h', 'e', 'l', 'l', 'o'};
+  ck_assert_int_eq(
+    (ssize_t) sizeof(payload), write(client_pair[0], payload, sizeof(payload))
+  );
+
+  struct selector_key key = {
+    .s = selector,
+    .fd = socks.client_fd,
+    .data = &socks,
+  };
+  ck_assert_int_eq(SOCKS5_ACTION_NONE, socks5_relay_client_read(&socks, &key));
+
+  // The origin cannot take the bytes yet: they stay buffered and the
+  // OP_WRITE subscription finishes the transfer later.
+  assert_buffer_eq(&socks.read_buffer, payload, sizeof(payload));
   ck_assert(selector->fds[socks.client_fd].interest & OP_READ);
   ck_assert(selector->fds[socks.origin_fd].interest & OP_WRITE);
 
@@ -303,7 +375,7 @@ START_TEST(test_domain_resolved_connect_falls_back_to_next_address) {
 }
 END_TEST
 
-START_TEST(test_relay_origin_read_then_client_write) {
+START_TEST(test_relay_origin_read_flushes_to_client_immediately) {
   init_selector_for_test();
 
   int client_pair[2];
@@ -345,19 +417,11 @@ START_TEST(test_relay_origin_read_then_client_write) {
   };
   origin_read(&origin_key);
 
-  assert_buffer_eq(&socks.write_buffer, payload, sizeof(payload));
-  ck_assert(selector->fds[socks.client_fd].interest & OP_WRITE);
-  ck_assert(selector->fds[socks.origin_fd].interest & OP_READ);
-
-  struct selector_key client_key = {
-    .s = selector,
-    .fd = socks.client_fd,
-    .data = &socks,
-  };
-  ck_assert_int_eq(
-    SOCKS5_ACTION_NONE, socks5_relay_client_write(&socks, &client_key)
-  );
+  // select -> read -> write: bytes go straight to the client fd, so nothing
+  // stays buffered and no OP_WRITE subscription is needed.
   ck_assert(!buffer_can_read(&socks.write_buffer));
+  ck_assert(!(selector->fds[socks.client_fd].interest & OP_WRITE));
+  ck_assert(selector->fds[socks.origin_fd].interest & OP_READ);
 
   uint8_t got[sizeof(payload)];
   ck_assert_int_eq(
@@ -404,19 +468,16 @@ START_TEST(test_relay_half_close_waits_until_pending_client_bytes_are_flushed) {
     )
   );
 
+  // Simulate bytes from an earlier read that a blocked origin could not
+  // take yet, so they are still waiting for the OP_WRITE subscription.
   const uint8_t payload[] = {'p', 'e', 'n', 'd', 'i', 'n', 'g'};
-  ck_assert_int_eq(
-    (ssize_t) sizeof(payload), write(client_pair[0], payload, sizeof(payload))
-  );
+  buffer_push(&socks.read_buffer, payload, sizeof(payload));
 
   struct selector_key client_key = {
     .s = selector,
     .fd = socks.client_fd,
     .data = &socks,
   };
-  ck_assert_int_eq(
-    SOCKS5_ACTION_NONE, socks5_relay_client_read(&socks, &client_key)
-  );
 
   ck_assert_int_eq(0, close(client_pair[0]));
   client_pair[0] = -1;
@@ -571,9 +632,12 @@ Suite *suite(void) {
   tcase_add_test(tc, test_hello_selects_username_password_and_moves_to_auth);
   tcase_add_test(tc, test_auth_success_and_failure_drive_state);
   tcase_add_test(tc, test_unsupported_command_writes_socks_reply_then_closes);
-  tcase_add_test(tc, test_relay_client_read_keeps_selector_interests_alive);
+  tcase_add_test(tc, test_relay_client_read_flushes_to_origin_immediately);
+  tcase_add_test(
+    tc, test_relay_client_read_keeps_bytes_buffered_when_origin_blocked
+  );
   tcase_add_test(tc, test_domain_resolved_connect_falls_back_to_next_address);
-  tcase_add_test(tc, test_relay_origin_read_then_client_write);
+  tcase_add_test(tc, test_relay_origin_read_flushes_to_client_immediately);
   tcase_add_test(
     tc, test_relay_half_close_waits_until_pending_client_bytes_are_flushed
   );
