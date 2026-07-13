@@ -44,6 +44,13 @@ static const struct fd_handler mon_handler = {
   .handle_close = mon_close,
 };
 
+// Writes the low nbytes of v to dst in big-endian order, returns nbytes.
+static size_t put_be(uint8_t *dst, uint64_t v, int nbytes) {
+  for (int i = 0; i < nbytes; i++)
+    dst[i] = (v >> (8 * (nbytes - 1 - i))) & 0xFF;
+  return (size_t) nbytes;
+}
+
 void mon_passive_accept(struct selector_key *key) {
   struct sockaddr_storage addr;
   socklen_t addr_len = sizeof(addr);
@@ -224,12 +231,9 @@ static void mon_process_request(struct mon_conn *conn) {
     case MON_CMD_GET_METRICS: {
       const struct metrics *m = metrics_get();
       uint8_t payload[MON_METRICS_PAYLOAD_LEN];
-      for (int i = 0; i < 8; i++)
-        payload[i] = (m->historic_connections >> (8 * (7 - i))) & 0xFF;
-      for (int i = 0; i < 8; i++)
-        payload[8 + i] = (m->current_connections >> (8 * (7 - i))) & 0xFF;
-      for (int i = 0; i < 8; i++)
-        payload[16 + i] = (m->bytes_transferred >> (8 * (7 - i))) & 0xFF;
+      put_be(payload + 0, m->historic_connections, 8);
+      put_be(payload + 8, m->current_connections, 8);
+      put_be(payload + 16, m->bytes_transferred, 8);
       send_response(conn, MON_STATUS_OK, payload, MON_METRICS_PAYLOAD_LEN);
       break;
     }
@@ -266,10 +270,8 @@ static void mon_process_request(struct mon_conn *conn) {
         uint8_t dlen = (uint8_t) strlen(e->dest_addr);
         uint64_t ts = (uint64_t) e->timestamp;
 
-        for (int j = 0; j < 8; j++)
-          payload[off++] = (ts >> (8 * (7 - j))) & 0xFF;
-        payload[off++] = (e->dest_port >> 8) & 0xFF;
-        payload[off++] = e->dest_port & 0xFF;
+        off += put_be(payload + off, ts, 8);
+        off += put_be(payload + off, e->dest_port, 2);
         payload[off++] = ulen;
         memcpy(payload + off, e->username, ulen);
         off += ulen;
@@ -277,8 +279,7 @@ static void mon_process_request(struct mon_conn *conn) {
         memcpy(payload + off, e->dest_addr, dlen);
         off += dlen;
       }
-      payload[0] = (encoded >> 8) & 0xFF;
-      payload[1] = encoded & 0xFF;
+      put_be(payload, encoded, 2);
       send_response(conn, MON_STATUS_OK, payload, (uint16_t) off);
       break;
     }

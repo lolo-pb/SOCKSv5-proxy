@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #include "buffer.h"
+#include "io_util.h"
 #include "metrics.h"
 #include "selector.h"
 #include "socks5.h"
@@ -19,7 +20,6 @@ static void
 socksv5_apply_action(struct selector_key *key, socks5_action action);
 static void socksv5_pool_add(struct socks5 *state);
 static void socksv5_pool_remove(struct socks5 *state);
-static bool socksv5_retryable_io_error(void);
 
 static struct socks5 *socksv5_pool = NULL;
 static size_t socksv5_pool_size = 0;
@@ -45,7 +45,7 @@ void socksv5_passive_accept(struct selector_key *key) {
     return;
   }
 
-  struct socks5 *state = calloc(1, sizeof(*state));
+  struct socks5 *state = malloc(sizeof(*state));
   if (state == NULL) {
     close(client);
     return;
@@ -85,7 +85,7 @@ static void socksv5_read(struct selector_key *key) {
     socks5_connection_close(state, key->s);
     return;
   } else if (bytes < 0) {
-    if (socksv5_retryable_io_error()) {
+    if (is_retryable_io_error()) {
       selector_set_interest_key(key, OP_READ);
       return;
     }
@@ -128,7 +128,7 @@ static void socksv5_write(struct selector_key *key) {
     socks5_connection_close(state, key->s);
     return;
   } else if (bytes < 0) {
-    if (socksv5_retryable_io_error()) {
+    if (is_retryable_io_error()) {
       selector_set_interest_key(key, OP_WRITE);
       return;
     }
@@ -214,6 +214,3 @@ void socksv5_pool_destroy(void) {
   }
 }
 
-static bool socksv5_retryable_io_error(void) {
-  return errno == EAGAIN || errno == EWOULDBLOCK;
-}
