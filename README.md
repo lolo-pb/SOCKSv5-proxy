@@ -43,7 +43,6 @@ Para limpiar: `make clean`
 | `-P port` | 8080 | Puerto monitoreo |
 | `-u user:pass` | — | Agregar usuario (hasta 10 veces) |
 | `-U file` | — | Cargar usuarios desde archivo (formato `user:pass` por línea) |
-| `-N` | — | Deshabilitar disector POP3 |
 
 ### Client (monitoreo)
 
