@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 
 
-DEFAULT_USERS_FILE = "users.conf"
+DEFAULT_USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.conf")
 
 
 @dataclass
