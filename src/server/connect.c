@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "dns_resolver.h"
+#include "io_util.h"
 #include "metrics.h"
 #include "request.h"
 #include "socks5.h"
@@ -203,11 +204,6 @@ origin_connect_write_handler(struct socks5 *socks, struct selector_key *key) {
 
   socks->stm.current = socks->stm.states + SOCKS5_STATE_REQUEST_WRITE;
   selector_set_interest(key->s, socks->client_fd, OP_WRITE);
-}
-
-// Retryable I/O helper
-static bool is_retryable_io_error(void) {
-  return errno == EAGAIN || errno == EWOULDBLOCK;
 }
 
 // Reads origin bytes into write_buffer (origin → client direction).
