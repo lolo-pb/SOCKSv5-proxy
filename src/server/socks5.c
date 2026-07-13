@@ -2,6 +2,7 @@
 #include "access_log.h"
 #include "connect.h"
 #include "dns_resolver.h"
+#include "io_util.h"
 #include "metrics.h"
 #include "user_table.h"
 
@@ -188,11 +189,6 @@ static unsigned start_relay(struct socks5 *socks, fd_selector selector) {
   buffer_reset(&socks->write_buffer);
   relay_update_interests(socks, selector);
   return SOCKS5_STATE_RELAY;
-}
-
-// Treats nonblocking would-block errors as normal selector flow.
-static bool is_retryable_io_error(void) {
-  return errno == EAGAIN || errno == EWOULDBLOCK;
 }
 
 // Attempts to drain `buf` into `fd` right away (select -> read -> write).

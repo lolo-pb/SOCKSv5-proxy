@@ -18,13 +18,16 @@
 #include "selector.h"
 #include "user_table.h"
 
-#define MON_BUF_SIZE 4096
+#define MON_IO_BUF_SIZE 4096
+#define MON_RESPONSE_PAYLOAD_MAX (MON_IO_BUF_SIZE - MON_RESPONSE_HEADER_LEN)
+#define MON_ACCESS_LOG_COUNT_LEN 2
+#define MON_ACCESS_LOG_ENTRY_FIXED_LEN (8 + 2 + 1 + 1)
 
 struct mon_conn {
   buffer read_buffer;
   buffer write_buffer;
-  uint8_t raw_read[MON_BUF_SIZE];
-  uint8_t raw_write[MON_BUF_SIZE];
+  uint8_t raw_read[MON_IO_BUF_SIZE];
+  uint8_t raw_write[MON_IO_BUF_SIZE];
   struct mon_parser parser;
   bool authenticated;
 };
@@ -33,6 +36,7 @@ static void mon_read(struct selector_key *key);
 static void mon_write(struct selector_key *key);
 static void mon_close(struct selector_key *key);
 static void mon_process_request(struct mon_conn *conn);
+static size_t access_log_entry_encoded_len(const struct access_entry *entry);
 
 static const struct fd_handler mon_handler = {
   .handle_read = mon_read,
@@ -58,8 +62,8 @@ void mon_passive_accept(struct selector_key *key) {
     return;
   }
 
-  buffer_init(&conn->read_buffer, MON_BUF_SIZE, conn->raw_read);
-  buffer_init(&conn->write_buffer, MON_BUF_SIZE, conn->raw_write);
+  buffer_init(&conn->read_buffer, MON_IO_BUF_SIZE, conn->raw_read);
+  buffer_init(&conn->write_buffer, MON_IO_BUF_SIZE, conn->raw_write);
   mon_parser_init(&conn->parser);
 
   if (
@@ -142,6 +146,11 @@ static void send_response(
   if (written > 0) buffer_write_adv(&conn->write_buffer, written);
 }
 
+static size_t access_log_entry_encoded_len(const struct access_entry *entry) {
+  return MON_ACCESS_LOG_ENTRY_FIXED_LEN + strlen(entry->username) +
+         strlen(entry->dest_addr);
+}
+
 struct list_ctx {
   uint8_t *buf;
   size_t offset;
@@ -203,7 +212,7 @@ static void mon_process_request(struct mon_conn *conn) {
       break;
 
     case MON_CMD_LIST_USERS: {
-      uint8_t payload[MON_BUF_SIZE];
+      uint8_t payload[MON_RESPONSE_PAYLOAD_MAX];
       struct list_ctx lc =
         {.buf = payload, .offset = 1, .cap = sizeof(payload), .count = 0};
       user_table_list(list_user_cb, &lc);
@@ -230,18 +239,33 @@ static void mon_process_request(struct mon_conn *conn) {
       const struct access_entry *entries = access_log_get(&count);
       unsigned oldest = access_log_oldest_index();
 
-      uint8_t payload[4096];
-      size_t off = 2;
+      uint8_t payload[MON_RESPONSE_PAYLOAD_MAX];
+      size_t off = MON_ACCESS_LOG_COUNT_LEN;
       uint16_t encoded = 0;
-      for (unsigned i = 0; i < count; i++) {
-        unsigned idx = (oldest + i) % MAX_LOG_ENTRIES;
+      unsigned newest = (oldest + count) % MAX_LOG_ENTRIES;
+      unsigned start = newest;
+
+      while (encoded < count) {
+        unsigned idx =
+          (newest + MAX_LOG_ENTRIES - 1 - encoded) % MAX_LOG_ENTRIES;
+        const struct access_entry *e = &entries[idx];
+        size_t entry_len = access_log_entry_encoded_len(e);
+
+        if (off + entry_len > sizeof(payload)) break;
+
+        off += entry_len;
+        start = idx;
+        encoded++;
+      }
+
+      off = MON_ACCESS_LOG_COUNT_LEN;
+      for (uint16_t i = 0; i < encoded; i++) {
+        unsigned idx = (start + i) % MAX_LOG_ENTRIES;
         const struct access_entry *e = &entries[idx];
         uint8_t ulen = (uint8_t) strlen(e->username);
         uint8_t dlen = (uint8_t) strlen(e->dest_addr);
-
-        if (off + 8 + 2 + 1 + ulen + 1 + dlen > sizeof(payload)) break;
-
         uint64_t ts = (uint64_t) e->timestamp;
+
         for (int j = 0; j < 8; j++)
           payload[off++] = (ts >> (8 * (7 - j))) & 0xFF;
         payload[off++] = (e->dest_port >> 8) & 0xFF;
@@ -252,7 +276,6 @@ static void mon_process_request(struct mon_conn *conn) {
         payload[off++] = dlen;
         memcpy(payload + off, e->dest_addr, dlen);
         off += dlen;
-        encoded++;
       }
       payload[0] = (encoded >> 8) & 0xFF;
       payload[1] = encoded & 0xFF;
